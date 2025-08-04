@@ -14,7 +14,7 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
     main_reconstruction.py \
     --project $project --exp_name $exp_name --auto_resume \
     --batch_size $batch_size --model detok_BB \
-    --gamma 3.0 --mask_ratio -1.0 \
+    --gamma 0.3 --mask_ratio 0.7 \
     --online_eval \
     --epochs 200 --discriminator_start_epoch 100 \
     --data_path ./data/imagenet/train

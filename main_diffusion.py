@@ -30,7 +30,7 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
 
-logger = logging.getLogger("DeTok")
+logger = logging.getLogger("DeTok-SiT")
 
 
 def main(args: argparse.Namespace) -> int:
