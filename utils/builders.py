@@ -267,6 +267,14 @@ def create_reconstruction_model(args):
             mask_ratio=args.mask_ratio,
             gamma=args.gamma,
         )
+    elif args.model in models.DeAE_models:
+        model = models.DeAE_models[args.model](
+            img_size=args.img_size,
+            patch_size=args.patch_size,
+            token_channels=args.token_channels,
+            mask_ratio=args.mask_ratio,
+            gamma=args.gamma,
+        )
     else:
         raise ValueError(f"Unsupported model {args.model}")
 

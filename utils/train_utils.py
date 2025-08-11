@@ -220,7 +220,13 @@ def train_one_epoch_tokenizer(
         # Forward pass and generator loss
         with torch.autocast("cuda", dtype=torch.bfloat16):
             results = model(x)
-            reconstructions, posteriors = results
+            if len(results) == 2:
+                reconstructions, posteriors = results
+            else:
+                # for autoencoders, we don't need posteriors
+                reconstructions = results
+                posteriors = None
+                
             # Normalize inputs to [0, 1] range for loss function
             targets = x * 0.5 + 0.5
             reconstructions = reconstructions * 0.5 + 0.5

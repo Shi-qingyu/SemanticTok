@@ -1,6 +1,7 @@
 from .ardiff import ARDiff_models
 from .autoencoder import AutoencoderKL, VAE_models
 from .detok import DeTok_models
+from .deae import DeAE_models
 from .dit import DiT_models
 from .ema import SimpleEMAModel
 from .lightningdit import LightningDiT_models
