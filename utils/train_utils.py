@@ -220,12 +220,14 @@ def train_one_epoch_tokenizer(
         # Forward pass and generator loss
         with torch.autocast("cuda", dtype=torch.bfloat16):
             results = model(x)
-            if len(results) == 2:
+            if isinstance(results, list) and len(results) == 2:
                 reconstructions, posteriors = results
-            else:
+            elif isinstance(results, torch.Tensor):
                 # for autoencoders, we don't need posteriors
                 reconstructions = results
                 posteriors = None
+            else:
+                raise ValueError(f"Invalid results type: {type(results)}")
                 
             # Normalize inputs to [0, 1] range for loss function
             targets = x * 0.5 + 0.5
@@ -913,6 +915,7 @@ def collect_tokenizer_stats(
 
         # encode samples - handle different tokenizer interfaces
         if hasattr(tokenizer, "encode_into_posteriors"):
+            tokenizer_type = "vae"
             # e.g. shape: [B, 2C, H, W] or [B, seq_len, 2C]
             #########################################################
             # moments is a concatenation of mean and std, so the channel dimension is doubled
@@ -921,8 +924,10 @@ def collect_tokenizer_stats(
             if hasattr(moments, "parameters"):
                 moments = moments.parameters
         elif hasattr(tokenizer, "encode"):
-            moments = tokenizer.encode(samples)
+            tokenizer_type = "ae"
+            moments = tokenizer.encode(samples)[0]
         else:
+            tokenizer_type = "unknown"
             raise AttributeError("tokenizer must have 'encode_into_posteriors' or 'encode' method")
 
         device, dtype = moments.device, moments.dtype
@@ -932,49 +937,91 @@ def collect_tokenizer_stats(
             total_sum = torch.tensor(0.0, device=device, dtype=dtype)
             total_sum_sq = torch.tensor(0.0, device=device, dtype=dtype)
 
-        # update statistics based on channel dimension
-        if chan_dim == 1:  # [B, 2C, H, W]
-            num_channels = moments.size(1) // 2
-            relevant_moments = moments[:, :num_channels]
-            
-            # overall stats
-            total_sum += relevant_moments.sum()
-            total_sum_sq += (relevant_moments**2).sum()
-            total_count += relevant_moments.numel()
+        if tokenizer_type == "vae":
+            # update statistics based on channel dimension
+            if chan_dim == 1:  # [B, 2C, H, W]
+                num_channels = moments.size(1) // 2
+                relevant_moments = moments[:, :num_channels]
+                
+                # overall stats
+                total_sum += relevant_moments.sum()
+                total_sum_sq += (relevant_moments ** 2).sum()
+                total_count += relevant_moments.numel()
 
-            # channel-wise stats
-            if channel_sum is None:
-                c = moments.size(1)
-                channel_sum = torch.zeros(c, device=device, dtype=dtype)
-                channel_sum_sq = torch.zeros(c, device=device, dtype=dtype)
+                # channel-wise stats
+                if channel_sum is None:
+                    c = moments.size(1)
+                    channel_sum = torch.zeros(c, device=device, dtype=dtype)
+                    channel_sum_sq = torch.zeros(c, device=device, dtype=dtype)
 
-            channel_sum += moments.sum(dim=[0, 2, 3])
-            channel_sum_sq += (moments**2).sum(dim=[0, 2, 3])
-            channel_count += moments.size(0) * moments.size(2) * moments.size(3)
+                channel_sum += moments.sum(dim=[0, 2, 3])
+                channel_sum_sq += (moments ** 2).sum(dim=[0, 2, 3])
+                channel_count += moments.size(0) * moments.size(2) * moments.size(3)
 
-        else:  # chan_dim == 2, [B, seq_len, C]
-            num_channels = moments.size(-1) // 2
-            relevant_moments = moments[..., :num_channels]
-            
-            # overall stats
-            total_sum += relevant_moments.sum()
-            total_sum_sq += (relevant_moments**2).sum()
-            total_count += relevant_moments.numel()
+            else:  # chan_dim == 2, [B, seq_len, C]
+                num_channels = moments.size(-1) // 2
+                relevant_moments = moments[..., :num_channels]
+                
+                # overall stats
+                total_sum += relevant_moments.sum()
+                total_sum_sq += (relevant_moments ** 2).sum()
+                total_count += relevant_moments.numel()
 
-            # channel-wise stats
-            if channel_sum is None:
-                c = moments.size(-1)
-                channel_sum = torch.zeros(c, device=device, dtype=dtype)
-                channel_sum_sq = torch.zeros(c, device=device, dtype=dtype)
+                # channel-wise stats
+                if channel_sum is None:
+                    c = moments.size(-1)
+                    channel_sum = torch.zeros(c, device=device, dtype=dtype)
+                    channel_sum_sq = torch.zeros(c, device=device, dtype=dtype)
 
-            channel_sum += moments.sum(dim=[0, 1])
-            channel_sum_sq += (moments**2).sum(dim=[0, 1])
-            channel_count += moments.size(0) * moments.size(1)
+                channel_sum += moments.sum(dim=[0, 1])
+                channel_sum_sq += (moments**2).sum(dim=[0, 1])
+                channel_count += moments.size(0) * moments.size(1)
+        elif tokenizer_type == "ae":
+            if chan_dim == 1:   # [B, C, H, W]
+                num_channels = moments.size(1)
+                relevant_moments = moments
+                
+                # overall stats
+                total_sum += relevant_moments.sum()
+                total_sum_sq += (relevant_moments ** 2).sum()
+                total_count += relevant_moments.numel()
+                
+                if channel_sum is None:
+                    c = moments.size(1)
+                    channel_sum = torch.zeros(c, device=device, dtype=dtype)
+                    channel_sum_sq = torch.zeros(c, device=device, dtype=dtype)
+
+                channel_sum += moments.sum(dim=[0, 2, 3])
+                channel_sum_sq += (moments ** 2).sum(dim=[0, 2, 3])
+                channel_count += moments.size(0) * moments.size(2) * moments.size(3)
+                
+            elif chan_dim == 2: # [B, seq_len, C]
+                num_channels = moments.size(-1)
+                relevant_moments = moments
+                
+                # overall stats
+                total_sum += relevant_moments.sum()
+                total_sum_sq += (relevant_moments ** 2).sum()
+                total_count += relevant_moments.numel()
+
+                # channel-wise stats
+                if channel_sum is None:
+                    c = moments.size(-1)
+                    channel_sum = torch.zeros(c, device=device, dtype=dtype)
+                    channel_sum_sq = torch.zeros(c, device=device, dtype=dtype)
+
+                channel_sum += moments.sum(dim=[0, 1])
+                channel_sum_sq += (moments ** 2).sum(dim=[0, 1])
+                channel_count += moments.size(0) * moments.size(1)
+            else:
+                raise ValueError(f"Unsupported chan_dim value: {chan_dim}. "
+                                f"Supported values: 1 for [B, C, H, W], 2 for [B, seq_len, C]")
+        
 
         # periodic logging
         if total_count > 0 and total_count % 10000 == 0:
             current_mean = total_sum / total_count
-            current_std = ((total_sum_sq / total_count) - current_mean**2).sqrt()
+            current_std = ((total_sum_sq / total_count) - current_mean ** 2).sqrt()
             logger.info(f"processed {total_count:,} elements | mean: {current_mean:.6f}, std: {current_std:.6f}")
 
     torch.distributed.barrier()
@@ -1015,8 +1062,12 @@ def collect_tokenizer_stats(
     
     if global_mean_single is not None:
         logger.info(f"global stats | mean: {global_mean_single:.6f}, std: {global_std_single:.6f}")
-        logger.info(f"channel stats | mean avg: {global_mean_channel[:num_channels].mean():.6f}, "
-                   f"std avg: {global_std_channel[:num_channels].mean():.6f}")
+        if tokenizer_type == "vae":
+            logger.info(f"channel stats | mean avg: {global_mean_channel[:num_channels].mean():.6f}, "
+                        f"std avg: {global_std_channel[:num_channels].mean():.6f}")
+        elif tokenizer_type == "ae":
+            logger.info(f"channel stats | mean avg: {global_mean_channel.mean():.6f}, "
+                        f"std avg: {global_std_channel.mean():.6f}")
 
     # cache results (main process only)
     if dist.is_main_process():
@@ -1035,4 +1086,5 @@ def collect_tokenizer_stats(
         except Exception as e:
             logger.error(f"failed to cache statistics: {e}")
 
+    global_stats["tokenizer_type"] = tokenizer_type
     return global_stats

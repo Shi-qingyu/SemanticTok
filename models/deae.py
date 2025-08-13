@@ -408,11 +408,6 @@ class DeAE(nn.Module):
         """normalize latent tokens."""
         return (z - self.mean.to(z)) * self.scale_factor / self.std.to(z)
 
-    def encode_into_posteriors(self, x: Tensor):
-        """encode image into posterior distributions."""
-        z = self.encoder(x, mask_ratio=0.0)[0]
-        return self.to_posteriors(z)
-
     def encode(self, x: Tensor, mask_ratio: float = -1, noise_level: float = -1.0):
         """encode image into latent tokens."""
         z, ids_restore = self.encoder(x, mask_ratio=mask_ratio)
@@ -437,7 +432,7 @@ class DeAE(nn.Module):
         """forward pass through the entire model."""
         z, ids_restore = self.encode(x=x)
         decoded = self.decoder(z, ids_restore=ids_restore)
-        return decoded, None    # Pseudo-posteriors, make DeAE compatible with the codebase
+        return decoded
 
     def tokenize(self, x: Tensor) -> Tensor:
         """tokenize input image and normalize the latent tokens."""

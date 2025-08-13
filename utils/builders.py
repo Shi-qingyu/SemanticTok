@@ -135,6 +135,13 @@ def create_generation_model(args):
                 token_channels=args.token_channels,
                 mask_ratio=0.0,
             )
+        elif args.tokenizer in models.DeAE_models:
+            tokenizer = models.DeAE_models[args.tokenizer](
+                img_size=args.img_size,
+                patch_size=args.tokenizer_patch_size,
+                token_channels=args.token_channels,
+                mask_ratio=0.0,
+            )
         else:
             raise ValueError(f"Unsupported tokenizer {args.tokenizer}")
         if args.load_tokenizer_from is not None:

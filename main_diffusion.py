@@ -50,7 +50,7 @@ def main(args: argparse.Namespace) -> int:
             return_path=True, drop_last=False
         )
         # (B, C, H, W) for chan_dim=2 or (B, seq_len, C) for chan_dim=1
-        chan_dim = 2 if args.tokenizer in models.DeTok_models else 1
+        chan_dim = 2 if (args.tokenizer in models.DeTok_models or args.tokenizer in models.DeAE_models) else 1
         
         # collect stats
         result_dict = collect_tokenizer_stats(
@@ -61,7 +61,7 @@ def main(args: argparse.Namespace) -> int:
         )
         # update tokenizer with computed statistics
         mean, std = result_dict["channel"]
-        if mean.ndim > 0:
+        if mean.ndim > 0 and result_dict["tokenizer_type"] == "vae":
             n_chans = len(mean) // 2
             mean, std = mean[:n_chans], std[:n_chans]
         tokenizer.reset_stats(mean, std)
