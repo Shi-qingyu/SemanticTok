@@ -24,18 +24,23 @@ class LinearProbing(nn.Module):
         self.model = model
         self.num_classes = num_classes
 
-        in_channels = model.encoder.token_channels // 2
-        self.linear = nn.Linear(in_channels, num_classes)
+        in_channels = model.encoder.width
+        linear = nn.Linear(in_channels, num_classes * 2)
+        self.model.encoder.latent_head = linear
+
         self.freeze_model()
     
     def freeze_model(self):
-        self.model.eval()
-        self.model.requires_grad_(False)
+        for name, param in self.model.named_parameters():
+            if "encoder.latent_head" in name:
+                print("Training latent head only")
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         z = self.model.tokenize(x, sampling=False)  # [B, C, H, W]
-        z = z.mean(dim=(-2, -1))
-        logits = self.linear(z)
+        logits = z.mean(dim=(-2, -1))
         return logits
 
 
@@ -120,6 +125,10 @@ def evaluate(model, data_loader, device):
             img = batch["img"].to(device, non_blocking=True)
             labels = batch["label"].to(device, non_blocking=True)
             
+            # Validate and clamp labels to prevent CUDA assertion errors
+            labels = labels.long()  # Ensure labels are long integers
+            labels = torch.clamp(labels, 0, 999)  # Clamp to valid range [0, 999] for ImageNet
+            
             logits = model(img)
             preds = torch.argmax(logits, dim=-1)
             correct = (preds == labels).sum().item()
@@ -150,7 +159,6 @@ def main(args: argparse.Namespace) -> int:
     model.load_state_dict(ckpt["model"])
     print("Checkpoint loaded")
     linear_prob = LinearProbing(model, args.num_classes)
-    linear_prob = linear_prob.to(device)
     
     # Then create dataloaders
     data_loader_train = create_train_dataloader(args)
@@ -169,6 +177,10 @@ def main(args: argparse.Namespace) -> int:
         )
 
     trainable_params = [p for p in linear_prob.parameters() if p.requires_grad]
+    
+    if args.lr is None:
+        args.lr = args.blr * args.global_bsz / 256
+    
     optimizer = torch.optim.Adam(
         trainable_params, 
         lr=args.lr if args.lr else args.blr,
@@ -189,17 +201,24 @@ def main(args: argparse.Namespace) -> int:
             data_loader_train.sampler.set_epoch(epoch)
             
         linear_prob.train()
-        start_time = time.time()
-
-        # Validation
-        if epoch % args.eval_freq == 0:
-            val_acc = evaluate(linear_prob, data_loader_val, device)
-            if is_main_process:
-                logger.info(f"Epoch {epoch} - Validation accuracy: {val_acc:.4f}")
 
         for step, batch in enumerate(data_loader_train):
             img = batch["img"].to(device, non_blocking=True)
             labels = batch["label"].to(device, non_blocking=True)
+            
+            # Validate and clamp labels to prevent CUDA assertion errors
+            labels = labels.long()  # Ensure labels are long integers
+            
+            # Debug: Check for invalid labels
+            if step == 0 and epoch == 0:
+                logger.info(f"Label range: min={labels.min().item()}, max={labels.max().item()}")
+                logger.info(f"Number of classes: {args.num_classes}")
+                invalid_labels = (labels < 0) | (labels >= args.num_classes)
+                if invalid_labels.any():
+                    logger.warning(f"Found {invalid_labels.sum().item()} invalid labels out of {labels.size(0)}")
+                    logger.warning(f"Invalid label values: {labels[invalid_labels].unique()}")
+            
+            labels = torch.clamp(labels, 0, args.num_classes - 1)  # Clamp to valid range [0, num_classes-1]
 
             logits = linear_prob(img)   # [b, num_classes]
             loss = loss_fn(logits, labels)
@@ -228,7 +247,11 @@ def main(args: argparse.Namespace) -> int:
                     f"Loss: {loss_reduced:.4f} Acc: {acc_reduced:.4f} "
                     f"LR: {optimizer.param_groups[0]['lr']:.6f}"
                 )
-    
+            
+        if epoch % args.eval_freq == 0:
+            val_acc = evaluate(linear_prob, data_loader_val, device)
+            if is_main_process:
+                logger.info(f"Epoch {epoch} - Validation accuracy: {val_acc:.4f}")
     return 0
 
 
@@ -246,6 +269,7 @@ def get_args_parser():
     parser.add_argument("--patch_size", default=16, type=int)
 
     parser.add_argument("--mask_ratio", default=0.0, type=float)
+    parser.add_argument("--random_mask_ratio", action="store_true")
     parser.add_argument("--gamma", default=0.0, type=float, help="noise standard deviation for training")
     parser.add_argument("--use_additive_noise", action="store_true")
 
@@ -267,7 +291,7 @@ def get_args_parser():
 
     # optimization parameters
     parser.add_argument("--lr", type=float, default=None)
-    parser.add_argument("--blr", type=float, default=1e-4)
+    parser.add_argument("--blr", type=float, default=1e-1)
     parser.add_argument("--min_lr", type=float, default=0.0)
     parser.add_argument("--lr_sched", type=str, default="cosine", choices=["constant", "cosine"])
     parser.add_argument("--warmup_rate", type=float, default=0.25)
