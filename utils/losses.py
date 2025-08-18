@@ -19,6 +19,8 @@ from torch import Tensor
 from torchvision import models
 from tqdm import tqdm
 
+from models.autoencoder import DiagonalGaussianDistribution
+
 logger = logging.getLogger("DeTok")
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -235,7 +237,6 @@ class NLayerDiscriminator(nn.Module):
     def forward(self, input: Tensor) -> Tensor:
         return self.main(input)
 
-
 class PerceptualLoss(torch.nn.Module):
     # reference: https://github.com/bytedance/1d-tokenizer/blob/main/modeling/modules/perceptual_loss.py
     def __init__(self, model_name: str = "convnext_s"):
@@ -324,6 +325,37 @@ class PerceptualLoss(torch.nn.Module):
         return loss
 
 
+class VFLoss(nn.Module):
+    def __init__(
+        self,
+        distmat_margin=0.25, 
+        cos_margin=0.5, 
+        distmat_weight=1.0, 
+        cos_weight=1.0,
+    ):
+        super().__init__()
+        self.distmat_margin = distmat_margin
+        self.cos_margin = cos_margin
+        self.distmat_weight = distmat_weight
+        self.cos_weight = cos_weight
+
+    def forward(self, latent_feature, aux_feature):
+        latent_feature = latent_feature.permute(0, 2, 1)
+        aux_feature = aux_feature.permute(0, 2, 1)
+
+        latent_feature_norm = F.normalize(latent_feature, dim=1)
+        aux_feature_norm = F.normalize(aux_feature, dim=1)
+
+        z_cos_sim = torch.einsum('bci,bcj->bij', latent_feature_norm, latent_feature_norm)
+        aux_feature_cos_sim = torch.einsum('bci,bcj->bij', aux_feature_norm, aux_feature_norm)
+
+        diff = torch.abs(z_cos_sim - aux_feature_cos_sim)
+        vf_loss_1 = F.relu(diff - self.distmat_margin).mean()
+        vf_loss_2 = F.relu(1 - self.cos_margin - F.cosine_similarity(aux_feature, latent_feature)).mean()
+        vf_loss = vf_loss_1 * self.distmat_weight + vf_loss_2 * self.cos_weight
+
+        return vf_loss
+
 class ReconstructionLoss(nn.Module):
     # reference: https://github.com/bytedance/1d-tokenizer/blob/main/modeling/modules/losses.py
     def __init__(
@@ -334,6 +366,7 @@ class ReconstructionLoss(nn.Module):
         perceptual_weight: float = 1.1,
         reconstruction_loss: str = "l2",
         reconstruction_weight: float = 1.0,
+        vf_weight: float = 0.0,
         kl_weight: float = 1e-6,
         logvar_init: float = 0.0,
     ):
@@ -349,6 +382,10 @@ class ReconstructionLoss(nn.Module):
         self.discriminator_start_epoch = discriminator_start_epoch
 
         self.kl_weight = kl_weight
+
+        self.vf_weight = vf_weight
+        self.vf_loss = VFLoss()
+
         # `requires_grad` must be false to avoid ddp error. No guarantee this implementationis right though.
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init, requires_grad=False)
 
@@ -407,8 +444,10 @@ class ReconstructionLoss(nn.Module):
         self,
         inputs: Tensor,
         reconstructions: Tensor,
-        extra_result_dict,
         epoch: int,
+        posteriors: DiagonalGaussianDistribution | None = None,
+        z_latents: Tensor | None = None,
+        aux_feature: Tensor | None = None,
     ) -> tuple[Tensor, dict[Text, Tensor]]:
         """generator training step"""
         inputs = inputs.contiguous()
@@ -444,17 +483,21 @@ class ReconstructionLoss(nn.Module):
 
         reconstruction_loss = reconstruction_loss / torch.exp(self.logvar)
         kl_loss = torch.zeros((), device=inputs.device)
-        if extra_result_dict is not None:
+        if posteriors is not None:
             # assume extra_result_dict contains posteriors with kl method
-            posteriors = extra_result_dict
             if hasattr(posteriors, "kl"):
                 kl_loss = posteriors.kl()
                 kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
+
+        vf_loss = torch.zeros((), device=inputs.device)
+        if aux_feature is not None and z_latents is not None:
+            vf_loss = self.vf_loss(z_latents, aux_feature)
 
         total_loss = (
             reconstruction_loss
             + self.perceptual_weight * perceptual_loss
             + self.kl_weight * kl_loss
+            + self.vf_weight * vf_loss
             + d_weight * d_factor * generator_loss
         )
 
@@ -463,6 +506,7 @@ class ReconstructionLoss(nn.Module):
             "reconstruction_loss": reconstruction_loss.detach(),
             "perceptual_loss": (self.perceptual_weight * perceptual_loss).detach(),
             "kl_loss": (self.kl_weight * kl_loss).detach(),
+            "vf_loss": (self.vf_weight * vf_loss).detach(),
             "weighted_gan_loss": (d_weight * d_factor * generator_loss).detach(),
             "discriminator_factor": torch.tensor(d_factor),
             "d_weight": torch.tensor(d_weight),

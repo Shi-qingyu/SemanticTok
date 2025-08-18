@@ -1,8 +1,10 @@
 import logging
 import random
 from functools import partial
+import os
 
 import numpy as np
+import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -329,6 +331,8 @@ class DeTok(nn.Module):
         vit_enc_model_size: str = "small",
         vit_dec_model_size: str = "base",
         token_channels: int = 16,
+        use_vf: bool = False,
+        vf_model_type: str = "dinov2",
         mask_ratio: float = 0.75,
         random_mask_ratio: bool = True,
         gamma: float = 3.0,
@@ -361,11 +365,28 @@ class DeTok(nn.Module):
         self.width = SIZE_DICT[vit_enc_model_size]["width"]
         self.use_additive_noise = use_additive_noise
         self.gamma = gamma
-
         self.scale_factor = scale_factor
+        self.use_vf = use_vf
+        self.vf_model_type = vf_model_type
 
         # initialize weights
         self.apply(self._init_weights)
+
+        # initialize vf loss
+        if use_vf:
+            if vf_model_type == "dinov2":
+                checkpoint_path = os.path.join("offline_models", "dinov2_vit_large_patch14", "pytorch_model.bin")
+                state_dict = torch.load(checkpoint_path, map_location="cpu")
+
+                self.foundation_model = timm.create_model("vit_large_patch14_dinov2.lvd142m", pretrained=False)
+                self.foundation_model.load_state_dict(state_dict["model_state_dict"])
+                self.foundation_model.requires_grad_(False)
+                logger.info(f"Loaded foundation model from {checkpoint_path}")
+
+                self.vf_feature_dim = self.foundation_model.feature_dim
+                self.linear_proj = nn.Linear(self.vf_feature_dim, self.token_channels)
+            else:
+                raise ValueError(f"Unknown foundation model type: {vf_model_type}")
 
         # setup to-posteriors function
         self.to_posteriors = partial(DiagonalGaussianDistribution, channel_dim=-1)
@@ -459,8 +480,28 @@ class DeTok(nn.Module):
 
     def forward(self, x: Tensor):
         """forward pass through the entire model."""
-        z_latents, result_dict, ids_restore = self.encode(x, sampling=self.training)
+        z_latents, posteriors, ids_restore = self.encode(x, sampling=self.training)
+
+        if self.use_vf and self.training:
+            if self.vf_model_type == "dinov2":
+                x_ = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
+            else:
+                raise ValueError(f"Unknown foundation model type: {self.vf_model_type}")
+
+            aux_feature = self.foundation_model.forward_features(x_)[:, 1:]   # [B, 256, dim]
+            aux_feature = self.linear_proj(aux_feature)
+        else:
+            aux_feature = None
+
         decoded = self.decoder(z_latents, ids_restore=ids_restore)
+
+        result_dict = dict(
+            posteriors=posteriors,
+            z_latents=z_latents,
+            ids_restore=ids_restore,
+            aux_feature=aux_feature,
+        )
+
         return decoded, result_dict
 
     def tokenize(self, x: Tensor, sampling: bool = False) -> Tensor:

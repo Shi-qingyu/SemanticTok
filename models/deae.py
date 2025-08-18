@@ -444,7 +444,10 @@ class DeAE(nn.Module):
         """forward pass through the entire model."""
         z, ids_restore = self.encode(x=x)
         decoded = self.decoder(z, ids_restore=ids_restore)
-        return decoded
+
+        result_dict = dict(z_latents=z, ids_restore=ids_restore)
+
+        return decoded, result_dict
 
     def tokenize(self, x: Tensor) -> Tensor:
         """tokenize input image and normalize the latent tokens."""

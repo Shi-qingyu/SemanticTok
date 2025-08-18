@@ -23,6 +23,7 @@ from tqdm import tqdm, trange
 import utils.distributed as dist
 import utils.misc as misc
 from utils.logger import MetricLogger, SmoothedValue, setup_logging, setup_wandb, WandbLogger
+from utils.losses import ReconstructionLoss
 
 tqdm = partial(tqdm, dynamic_ncols=True)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -190,7 +191,7 @@ def train_one_epoch_tokenizer(
     wandb_logger: WandbLogger | None,
     epoch: int,
     ema_model: torch.nn.Module,
-    loss_fn: torch.nn.Module,
+    loss_fn: ReconstructionLoss,
     discriminator_optimizer: torch.optim.Optimizer,
     discriminator_loss_scaler: misc.NativeScalerWithGradNormCount,
 ):
@@ -220,21 +221,21 @@ def train_one_epoch_tokenizer(
         # Forward pass and generator loss
         with torch.autocast("cuda", dtype=torch.bfloat16):
             results = model(x)
-            if isinstance(results, list) and len(results) == 2:
-                reconstructions, posteriors = results
-            elif isinstance(results, tuple) and len(results) == 2:
-                reconstructions, posteriors = results
-            elif isinstance(results, torch.Tensor):
-                # for autoencoders, we don't need posteriors
-                reconstructions = results
-                posteriors = None
+            reconstructions, result_dict = results
+
+            if isinstance(result_dict, dict):
+                posteriors = result_dict.get("posteriors", None)
+                z_latents = result_dict.get("z_latents", None)
+                ids_restore = result_dict.get("ids_restore", None)
+                aux_feature = result_dict.get("aux_feature", None)
             else:
-                raise ValueError(f"Invalid results type: {type(results)}")
+                raise ValueError(f"Invalid result_dict type: {type(result_dict)}")
                 
             # Normalize inputs to [0, 1] range for loss function
             targets = x * 0.5 + 0.5
             reconstructions = reconstructions * 0.5 + 0.5
-            ae_loss, loss_dict = loss_fn(targets, reconstructions, posteriors, epoch, "generator")
+            ae_loss, loss_dict = loss_fn(
+                targets, reconstructions, posteriors, epoch, "generator")
 
             # Process loss dictionary
             autoencoder_logs = {}
