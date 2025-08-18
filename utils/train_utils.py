@@ -235,7 +235,14 @@ def train_one_epoch_tokenizer(
             targets = x * 0.5 + 0.5
             reconstructions = reconstructions * 0.5 + 0.5
             ae_loss, loss_dict = loss_fn(
-                targets, reconstructions, posteriors, epoch, "generator")
+                input=targets, 
+                reconstructions=reconstructions, 
+                epoch=epoch,
+                posteriors=posteriors,
+                z_latents=z_latents,
+                aux_feature=aux_feature,
+                mode="generator",
+            )
 
             # Process loss dictionary
             autoencoder_logs = {}
@@ -260,7 +267,10 @@ def train_one_epoch_tokenizer(
             # this loss module assumes that both x and reconstructed are in [0, 1]
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 discriminator_loss, loss_dict_discriminator = loss_fn(
-                    targets, reconstructions, posteriors, epoch, mode="discriminator"
+                    input=targets, 
+                    reconstructions=reconstructions, 
+                    epoch=epoch,
+                    mode="discriminator",
                 )
 
             # Gather the losses across all processes for logging

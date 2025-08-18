@@ -407,8 +407,10 @@ class ReconstructionLoss(nn.Module):
         self,
         inputs: Tensor,
         reconstructions: Tensor,
-        extra_result_dict,
         epoch: int,
+        posteriors: DiagonalGaussianDistribution | None = None,
+        z_latents: Tensor | None = None,
+        aux_feature: Tensor | None = None,
         mode: str = "generator",
         last_layer=None,
     ) -> tuple[Tensor, dict[Text, Tensor]]:
@@ -431,7 +433,7 @@ class ReconstructionLoss(nn.Module):
             self._data_range_checked = True
 
         if mode == "generator":
-            return self._forward_generator(inputs, reconstructions, extra_result_dict, epoch)
+            return self._forward_generator(inputs, reconstructions, epoch, posteriors, z_latents, aux_feature)
         elif mode == "discriminator":
             return self._forward_discriminator(inputs, reconstructions, epoch)
         else:
