@@ -121,7 +121,10 @@ def ckpt_resume(
             # load the checkpoint
             logger.info(f"[Model-resume] Resuming from: {args.resume_from}")
             checkpoint = torch.load(args.resume_from, map_location="cpu", weights_only=False)
-            msg = model.load_state_dict(checkpoint["model"])
+            # we allow missing keys in the model state dict since we don't save the untrained parameters
+            msg = model.load_state_dict(checkpoint["model"], strict=False)
+            # make sure there are no unexpected keys
+            assert len(msg.unexpected_keys) == 0, f"unexpected keys: {msg.unexpected_keys}"
             logger.info(f"[Model-resume] Loaded model: {msg}")
 
             if "model_ema" in checkpoint:
@@ -156,7 +159,8 @@ def ckpt_resume(
 
             # load the loss module state dict if it exists
             if "loss_module" in checkpoint and loss_module is not None:
-                msg = loss_module.load_state_dict(checkpoint["loss_module"])
+                msg = loss_module.load_state_dict(checkpoint["loss_module"], strict=False)
+                assert len(msg.unexpected_keys) == 0, f"unexpected keys: {msg.unexpected_keys}"
                 logger.info(f"[Model-resume] Loaded loss_module: {msg}")
 
             if "discriminator_optimizer" in checkpoint and discriminator_optimizer is not None:
@@ -287,9 +291,13 @@ def save_checkpoint(
 ):
     if not dist.is_main_process():
         return
+    
+    model_state_dict = {k: v for k, v in model.state_dict().items() if v.requires_grad}
+    model_ema_state_dict = {k: v for k, v in model_ema.state_dict().items() if k in model_state_dict} if model_ema is not None else None
+        
     checkpoint = {
-        "model": model.state_dict(),
-        "model_ema": model_ema.state_dict() if model_ema is not None else None,
+        "model": model_state_dict,
+        "model_ema": model_ema_state_dict,
         "optimizer": optimizer.state_dict(),
         "loss_scaler": loss_scaler.state_dict(),
         "epoch": epoch,

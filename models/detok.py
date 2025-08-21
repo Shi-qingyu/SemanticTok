@@ -15,6 +15,7 @@ from torch import Tensor
 from models.model_utils import SIZE_DICT
 
 from .autoencoder import DiagonalGaussianDistribution
+from utils.foundation_models import create_foundation_model
 
 logger = logging.getLogger("DeTok")
 
@@ -120,6 +121,88 @@ class Block(nn.Module):
 
 
 # ================================
+# Auxiliary Decoder
+# ================================
+
+
+class AuxiliaryDecoder(nn.Module):
+    """auxiliary decoder for training the model."""
+    
+    def __init__(
+        self, 
+        img_size: int = 256,
+        patch_size: int = 16,
+        model_size: str = "base", 
+        token_channels: int = 16,
+        aux_embed_dim: int = 1024,
+    ):
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.grid_size = self.img_size // self.patch_size
+        self.seq_len = self.grid_size ** 2
+        
+        self.model_size = model_size
+        size_dict = SIZE_DICT[self.model_size]
+        num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
+        self.width = width
+        
+        self.token_channels = token_channels
+        self.aux_embed_dim = aux_embed_dim
+        
+        # learnable embeddings
+        scale = width ** -0.5
+        self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
+        
+        # token embedding
+        self.token_embedding = nn.Linear(self.token_channels, width)
+        
+        # mask embedding
+        self.mask_embedding = nn.Parameter(torch.zeros(1, 1, width))
+        
+        # transformer layers
+        norm_layer = partial(nn.RMSNorm, eps=1e-6)
+        self.ln_pre = norm_layer(width)
+        self.transformer = nn.ModuleList(
+            [Block(dim=width, num_heads=num_heads, norm_layer=norm_layer) for _ in range(num_layers)]
+        )
+        self.ln_post = norm_layer(width)
+        
+        # output layers
+        self.out = nn.Linear(self.width, self.aux_embed_dim)
+
+        # rotary position embedding
+        head_dim = self.transformer[0].attn.head_dim
+        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size).unsqueeze(0)
+        self.register_buffer("rope_tensor", rope_tensor, persistent=False)
+
+        params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
+        logger.info(f"[DeTok-AuxiliaryDecoder] params: {params_M:.2f}M, {model_size}-{num_layers}-{width}")
+    
+    def forward(self, z_latents: Tensor, ids_restore: Tensor | None = None):
+        """forward pass through auxiliary decoder."""
+        z = self.token_embedding(z_latents)
+        bsz, seq_len, _ = z.shape
+
+        if ids_restore is not None:
+            num_mask_tokens = ids_restore.shape[1] + 1 - seq_len
+            mask_tokens = self.mask_embedding.repeat(bsz, num_mask_tokens, 1)
+            z_ = torch.cat([z, mask_tokens], dim=1)
+            expanded_ids_restore = ids_restore.unsqueeze(-1).expand(-1, -1, z_.shape[-1])
+            z = torch.gather(z_, dim=1, index=expanded_ids_restore)
+        
+        z = z + self.positional_embedding
+        
+        z = self.ln_pre(z)
+        rope = self.rope_tensor.expand(bsz, -1, -1)
+        for block in self.transformer:
+            z = block(z, rope=rope)
+        z = self.ln_post(z)
+        
+        return self.out(z)
+
+
+# ================================
 # Encoder and Decoder
 # ================================
 
@@ -190,16 +273,11 @@ class Encoder(nn.Module):
     def mae_random_masking(self, x: Tensor):
         """apply masked autoencoding random masking."""
         bsz, seq_len, chans = x.shape
-        if not self.training:
-            # no masking
-            rope = self.rope_tensor.expand(bsz, -1, -1)
-            return x, torch.zeros(bsz, seq_len, device=x.device), None, rope
-
         # mask: 0 for visible, 1 for masked
-        if self.mask_ratio == 0:
+        if self.mask_ratio == 0 or not self.training:
             # no masking
             rope = self.rope_tensor.expand(bsz, -1, -1)
-            return x, torch.zeros(bsz, seq_len, device=x.device), None, rope
+            return x, torch.zeros(bsz, seq_len, device=x.device), None, rope, None
 
         if self.random_mask_ratio:
             mask_ratio = max(0.0, random.uniform(-0.1, self.mask_ratio))
@@ -209,21 +287,23 @@ class Encoder(nn.Module):
         len_keep = int(np.ceil(seq_len * (1 - mask_ratio)))
         noise = torch.rand(bsz, seq_len, device=x.device)
         ids_shuffle = torch.argsort(noise, dim=1)
-        ids_restore = torch.argsort(ids_shuffle, dim=1)
-        ids_keep = ids_shuffle[:, :len_keep]
-        x_visible = torch.gather(x, 1, ids_keep[..., None].repeat(1, 1, chans))
-        rope = self.rope_tensor.expand(bsz, -1, -1)
+        # ids_restore[:, i] = j means ith token in the original sequence ranks jth in the shuffled sequence
+        ids_restore = torch.argsort(ids_shuffle, dim=1) # [bsz, seq_len]
+        ids_keep = ids_shuffle[:, :len_keep] # [bsz, len_keep]
+        x_visible = torch.gather(x, 1, ids_keep[..., None].repeat(1, 1, chans)) # x_visible[i, j, k] = x[i, ids_keep[i, j, k], k]
+        rope = self.rope_tensor.expand(bsz, -1, -1) # [bsz, seq_len, head_dim]
         rope_visible = torch.gather(rope, 1, ids_keep[..., None].repeat(1, 1, rope.shape[-1]))
 
         mask = torch.ones(bsz, seq_len, device=x.device)
         mask[:, :len_keep] = 0
-        mask = torch.gather(mask, dim=1, index=ids_restore)
-        return x_visible, mask, ids_restore, rope_visible
+        # ids_restore[:, i] >= len_keep means ith token in the original sequence is masked
+        mask = torch.gather(mask, dim=1, index=ids_restore) # mask[i, j] = mask[i, ids_restore[i, j]]
+        return x_visible, mask, ids_restore, rope_visible, ids_keep
 
     def forward(self, x: Tensor):
         """forward pass through encoder."""
         x = self.patch_embed(x) + self.positional_embedding
-        x, _, ids_restore, rope = self.mae_random_masking(x)
+        x, _, ids_restore, rope, ids_keep = self.mae_random_masking(x)
 
         x = self.ln_pre(x)
         for block in self.transformer:
@@ -232,7 +312,7 @@ class Encoder(nn.Module):
 
         tokens = self.latent_head(x)
 
-        return tokens, ids_restore
+        return tokens, ids_restore, ids_keep
 
 
 class Decoder(nn.Module):
@@ -330,9 +410,12 @@ class DeTok(nn.Module):
         patch_size: int = 16,
         vit_enc_model_size: str = "small",
         vit_dec_model_size: str = "base",
+        vit_aux_model_size: str = "tiny",
         token_channels: int = 16,
         use_vf: bool = False,
+        use_aux_decoder: bool = False,
         vf_model_type: str = "dinov2",
+        aux_model_type: str = "dinov2",
         mask_ratio: float = 0.75,
         random_mask_ratio: bool = True,
         gamma: float = 3.0,
@@ -369,6 +452,8 @@ class DeTok(nn.Module):
         self.scale_factor = scale_factor
         self.use_vf = use_vf
         self.vf_model_type = vf_model_type
+        self.use_aux_decoder = use_aux_decoder
+        self.aux_model_type = aux_model_type
 
         # initialize weights
         self.apply(self._init_weights)
@@ -376,18 +461,30 @@ class DeTok(nn.Module):
         # initialize vf loss
         if use_vf:
             if vf_model_type == "dinov2":
-                checkpoint_path = os.path.join("offline_models", "dinov2_vit_large_patch14", "pytorch_model.bin")
-                state_dict = torch.load(checkpoint_path, map_location="cpu")
-
-                self.foundation_model = timm.create_model("vit_large_patch14_dinov2.lvd142m", pretrained=False, dynamic_img_size=True)
-                self.foundation_model.load_state_dict(state_dict["model_state_dict"])
+                self.foundation_model = create_foundation_model(vf_model_type)
+                self.foundation_model.eval()
                 self.foundation_model.requires_grad_(False)
-                logger.info(f"[VF Model] Loaded foundation model from {checkpoint_path}")
 
                 self.vf_feature_dim = self.foundation_model.num_features
                 self.linear_proj = nn.Linear(self.vf_feature_dim, self.token_channels)
             else:
                 raise ValueError(f"Unknown foundation model type: {vf_model_type}")
+        
+        if use_aux_decoder:
+            if aux_model_type == "dinov2":
+                self.aux_foundation_model = create_foundation_model(aux_model_type)
+                self.aux_foundation_model.eval()
+                self.aux_foundation_model.requires_grad_(False)
+                
+                aux_feature_dim = self.aux_foundation_model.num_features
+                self.aux_decoder = AuxiliaryDecoder(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    model_size=vit_aux_model_size,
+                    token_channels=token_channels,
+                    aux_embed_dim=aux_feature_dim,
+                )
+                logger.info(f"[Auxiliary Decoder] Initialized auxiliary decoder")
 
         # setup to-posteriors function
         self.to_posteriors = partial(DiagonalGaussianDistribution, channel_dim=-1)
@@ -453,12 +550,12 @@ class DeTok(nn.Module):
 
     def encode_into_posteriors(self, x: Tensor):
         """encode image into posterior distributions."""
-        z = self.encoder(x, mask_ratio=0.0)[0]
+        z = self.encoder(x)[0]
         return self.to_posteriors(z)
 
     def encode(self, x: Tensor, sampling: bool = False, noise_level: float = -1.0):
         """encode image into latent tokens."""
-        z, ids_restore = self.encoder(x)
+        z, ids_restore, ids_keep = self.encoder(x)
 
         posteriors = self.to_posteriors(z)
         z_latents = posteriors.sample() if sampling else posteriors.mean
@@ -477,11 +574,11 @@ class DeTok(nn.Module):
             else:
                 z_latents = (1 - noise_level_tensor) * z_latents + noise_level_tensor * noise
 
-        return z_latents, posteriors, ids_restore
+        return z_latents, posteriors, ids_restore, ids_keep
 
     def forward(self, x: Tensor):
         """forward pass through the entire model."""
-        z_latents, posteriors, ids_restore = self.encode(x, sampling=self.training)
+        z_latents, posteriors, ids_restore, ids_keep = self.encode(x, sampling=self.training)
 
         if self.use_vf and self.training:
             if self.vf_model_type == "dinov2":
@@ -489,18 +586,39 @@ class DeTok(nn.Module):
             else:
                 raise ValueError(f"Unknown foundation model type: {self.vf_model_type}")
 
-            aux_feature = self.foundation_model.forward_features(x_)[:, 1:]   # [B, 256, dim]
-            aux_feature = self.linear_proj(aux_feature)
+            vf_feature = self.foundation_model.forward_features(x_)[:, 1:]   # [B, 256, dim]
+            
+            if ids_keep is not None:
+                expanded_ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, vf_feature.shape[-1])
+                vf_feature = torch.gather(vf_feature, dim=1, index=expanded_ids_keep)
+            
+            vf_feature = self.linear_proj(vf_feature)
         else:
-            aux_feature = None
+            vf_feature = None
 
+        if self.use_aux_decoder and self.training:
+            if self.aux_model_type == "dinov2":
+                x_ = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
+                
+                aux_feature = self.aux_foundation_model.forward_features(x_)[:, 1:]   # [B, 256, dim]
+                pred_aux_feature = self.aux_decoder(z_latents, ids_restore=ids_restore)
+                
+                # if ids_keep is not None:
+                #     expanded_ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, aux_feature.shape[-1])
+                #     aux_feature = torch.gather(aux_feature, dim=1, index=expanded_ids_keep)
+                #     pred_aux_feature = torch.gather(pred_aux_feature, dim=1, index=expanded_ids_keep)
+            else:
+                raise ValueError(f"Unknown foundation model type: {self.aux_model_type}")
+            
         decoded = self.decoder(z_latents, ids_restore=ids_restore)
 
         result_dict = dict(
             posteriors=posteriors,
             z_latents=z_latents,
             ids_restore=ids_restore,
+            vf_feature=vf_feature,
             aux_feature=aux_feature,
+            pred_aux_feature=pred_aux_feature,
         )
 
         return decoded, result_dict

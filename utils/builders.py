@@ -1,7 +1,9 @@
+import os
 import logging
 
 import torch.utils.data
 import torchvision.transforms as transforms
+import timm
 
 import models
 import utils.distributed as distributed
@@ -159,7 +161,7 @@ def create_generation_model(args):
                 if args.use_ema_tokenizer:
                     logger.warning("EMA tokenizer is not in the checkpoint, using the model weights")
                 weights = weights["model"] if "model" in weights else weights
-                msg = tokenizer.load_state_dict(weights, strict=True)
+                msg = tokenizer.load_state_dict(weights, strict=False)
                 logger.info(f"[Tokenizer] Missing keys: {msg.missing_keys}")
                 logger.info(f"[Tokenizer] Unexpected keys: {msg.unexpected_keys}")
         tokenizer.cuda().eval().requires_grad_(False)
@@ -274,9 +276,13 @@ def create_reconstruction_model(args):
             patch_size=args.patch_size,
             token_channels=args.token_channels,
             mask_ratio=args.mask_ratio,
-            random_mask_ratio=args.random_mask_ratio,
             gamma=args.gamma,
-            use_vf=args.use_vf_loss,
+            random_mask_ratio=args.random_mask_ratio if hasattr(args, "random_mask_ratio") else True,
+            use_vf=args.use_vf_loss if hasattr(args, "use_vf_loss") else False,
+            vf_model_type=args.vf_model_type if hasattr(args, "vf_model_type") else "dinov2",
+            use_aux_decoder=args.use_aux_decoder if hasattr(args, "use_aux_decoder") else False,
+            vit_aux_model_size=args.vit_aux_model_size if hasattr(args, "vit_aux_model_size") else "tiny",
+            aux_model_type=args.aux_model_type if hasattr(args, "aux_model_type") else "dinov2",
         )
     elif args.model in models.DeAE_models:
         model = models.DeAE_models[args.model](
@@ -351,6 +357,8 @@ def create_loss_module(args):
         perceptual_weight=getattr(args, "perceptual_weight", 1.1),
         kl_weight=args.kl_loss_weight,
         vf_weight=args.vf_loss_weight,
+        aux_loss=args.aux_loss,
+        aux_weight=args.aux_loss_weight,
     )
     loss_module.cuda()
     logger.info("====Loss Module=====")

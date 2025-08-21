@@ -242,6 +242,7 @@ class NLayerDiscriminator(nn.Module):
     def forward(self, input: Tensor) -> Tensor:
         return self.main(input)
 
+
 class PerceptualLoss(torch.nn.Module):
     # reference: https://github.com/bytedance/1d-tokenizer/blob/main/modeling/modules/perceptual_loss.py
     def __init__(self, model_name: str = "convnext_s"):
@@ -364,6 +365,29 @@ class VFLoss(nn.Module):
 
         return vf_loss
 
+
+class AuxLoss(nn.Module):
+    def __init__(self, aux_loss: str = "default"):
+        super().__init__()
+        self.aux_loss = aux_loss
+
+    def forward(self, aux_feature, pred_aux_feature):
+        if self.aux_loss == "l2":
+            aux_loss = F.mse_loss(aux_feature, pred_aux_feature, reduction="mean")
+        elif self.aux_loss == "l1":
+            aux_loss = F.l1_loss(aux_feature, pred_aux_feature, reduction="mean")
+        elif self.aux_loss == "cosine":
+            aux_loss = F.cosine_similarity(aux_feature, pred_aux_feature, dim=-1, eps=1e-8).mean()
+        elif self.aux_loss == "default":
+            aux_feature = F.normalize(aux_feature, dim=-1)
+            pred_aux_feature = F.normalize(pred_aux_feature, dim=-1)
+            
+            aux_loss = -(aux_feature * pred_aux_feature).sum(dim=-1, keepdim=True)
+            aux_loss = aux_loss.mean()
+        
+        return aux_loss
+
+
 class ReconstructionLoss(nn.Module):
     # reference: https://github.com/bytedance/1d-tokenizer/blob/main/modeling/modules/losses.py
     def __init__(
@@ -375,6 +399,8 @@ class ReconstructionLoss(nn.Module):
         reconstruction_loss: str = "l2",
         reconstruction_weight: float = 1.0,
         vf_weight: float = 0.0,
+        aux_loss: str = "default",
+        aux_weight: float = 0.0,
         kl_weight: float = 1e-6,
         logvar_init: float = 0.0,
     ):
@@ -393,6 +419,9 @@ class ReconstructionLoss(nn.Module):
 
         self.vf_weight = vf_weight
         self.vf_loss = VFLoss()
+        
+        self.aux_weight = aux_weight
+        self.aux_loss = AuxLoss(aux_loss)
 
         # `requires_grad` must be false to avoid ddp error. No guarantee this implementationis right though.
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init, requires_grad=False)
@@ -418,7 +447,9 @@ class ReconstructionLoss(nn.Module):
         epoch: int,
         posteriors: DiagonalGaussianDistribution | None = None,
         z_latents: Tensor | None = None,
+        vf_feature: Tensor | None = None,
         aux_feature: Tensor | None = None,
+        pred_aux_feature: Tensor | None = None,
         mode: str = "generator",
         last_layer=None,
     ) -> tuple[Tensor, dict[Text, Tensor]]:
@@ -441,7 +472,7 @@ class ReconstructionLoss(nn.Module):
             self._data_range_checked = True
 
         if mode == "generator":
-            return self._forward_generator(inputs, reconstructions, epoch, posteriors, z_latents, aux_feature)
+            return self._forward_generator(inputs, reconstructions, epoch, posteriors, z_latents, vf_feature, aux_feature, pred_aux_feature)
         elif mode == "discriminator":
             return self._forward_discriminator(inputs, reconstructions, epoch)
         else:
@@ -457,7 +488,9 @@ class ReconstructionLoss(nn.Module):
         epoch: int,
         posteriors: DiagonalGaussianDistribution | None = None,
         z_latents: Tensor | None = None,
+        vf_feature: Tensor | None = None,
         aux_feature: Tensor | None = None,
+        pred_aux_feature: Tensor | None = None,
     ) -> tuple[Tensor, dict[Text, Tensor]]:
         """generator training step"""
         inputs = inputs.contiguous()
@@ -500,14 +533,19 @@ class ReconstructionLoss(nn.Module):
                 kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
 
         vf_loss = torch.zeros((), device=inputs.device)
-        if aux_feature is not None and z_latents is not None:
-            vf_loss = self.vf_loss(z_latents, aux_feature)
+        if vf_feature is not None and z_latents is not None:
+            vf_loss = self.vf_loss(z_latents, vf_feature)
+        
+        aux_loss = torch.zeros((), device=inputs.device)
+        if aux_feature is not None and pred_aux_feature is not None:
+            aux_loss = self.aux_loss(aux_feature, pred_aux_feature)
 
         total_loss = (
             reconstruction_loss
             + self.perceptual_weight * perceptual_loss
             + self.kl_weight * kl_loss
             + self.vf_weight * vf_loss
+            + self.aux_weight * aux_loss
             + d_weight * d_factor * generator_loss
         )
 
@@ -517,6 +555,7 @@ class ReconstructionLoss(nn.Module):
             "perceptual_loss": (self.perceptual_weight * perceptual_loss).detach(),
             "kl_loss": (self.kl_weight * kl_loss).detach(),
             "vf_loss": (self.vf_weight * vf_loss).detach(),
+            "aux_loss": (self.aux_weight * aux_loss).detach(),
             "weighted_gan_loss": (d_weight * d_factor * generator_loss).detach(),
             "discriminator_factor": torch.tensor(d_factor),
             "d_weight": torch.tensor(d_weight),
