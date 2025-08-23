@@ -1,6 +1,7 @@
 data/
 data
 work_dirs/
+offline_models/
 *.mp4
 *draft*
 pretrained_models/
