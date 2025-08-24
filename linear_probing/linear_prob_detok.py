@@ -25,6 +25,8 @@ class LinearProbing(nn.Module):
         self.num_classes = num_classes
 
         in_channels = model.encoder.width
+        
+        # mean and variance
         linear = nn.Linear(in_channels, num_classes * 2)
         self.model.encoder.latent_head = linear
 
@@ -33,7 +35,7 @@ class LinearProbing(nn.Module):
     def freeze_model(self):
         for name, param in self.model.named_parameters():
             if "encoder.latent_head" in name:
-                print("Training latent head only")
+                logger.info("Training latent head only")
                 param.requires_grad = True
             else:
                 param.requires_grad = False
@@ -154,10 +156,10 @@ def main(args: argparse.Namespace) -> int:
     # First create model and move to device
     device = torch.device(f"cuda:{dist.get_global_rank()}")
     model = create_reconstruction_model(args)[0]
-    print(f"Loading checkpoint from {args.checkpoint_path}")
-    ckpt = torch.load(args.checkpoint_path, map_location=device)
-    model.load_state_dict(ckpt["model"])
-    print("Checkpoint loaded")
+    logger.info(f"Loading checkpoint from {args.checkpoint_path}")
+    ckpt = torch.load(args.checkpoint_path, map_location="cpu")
+    msg = model.load_state_dict(ckpt["model"], strict=False)
+    logger.info(f"Checkpoint loaded: {msg}")
     linear_prob = LinearProbing(model, args.num_classes)
     
     # Then create dataloaders
@@ -217,8 +219,6 @@ def main(args: argparse.Namespace) -> int:
                 if invalid_labels.any():
                     logger.warning(f"Found {invalid_labels.sum().item()} invalid labels out of {labels.size(0)}")
                     logger.warning(f"Invalid label values: {labels[invalid_labels].unique()}")
-            
-            labels = torch.clamp(labels, 0, args.num_classes - 1)  # Clamp to valid range [0, num_classes-1]
 
             logits = linear_prob(img)   # [b, num_classes]
             loss = loss_fn(logits, labels)
@@ -259,7 +259,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser("Reconstruction model training", add_help=False)
 
     # basic training parameters
-    parser.add_argument("--epochs", default=200, type=int)
+    parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--batch_size", default=64, type=int, help="Batch size per GPU for training")
 
     # model parameters
@@ -278,7 +278,7 @@ def get_args_parser():
     # logging parameters
     parser.add_argument("--output_dir", default="./work_dirs/linear_prob")
     parser.add_argument("--print_freq", type=int, default=100)
-    parser.add_argument("--eval_freq", type=int, default=10)
+    parser.add_argument("--eval_freq", type=int, default=1)
 
 
     # evaluation parameters
@@ -316,7 +316,7 @@ def get_args_parser():
     parser.add_argument("--seed", default=0, type=int)
 
     # wandb parameters
-    parser.add_argument("--project", default="lDeTok", type=str)
+    parser.add_argument("--project", default="linear_prob_DeTok", type=str)
     parser.add_argument("--entity", default="YOUR_WANDB_ENTITY", type=str)
     parser.add_argument("--exp_name", default=None, type=str)
     parser.add_argument("--enable_wandb", action="store_true")
