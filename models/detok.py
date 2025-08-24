@@ -603,12 +603,16 @@ class DeTok(nn.Module):
                 aux_feature = self.aux_foundation_model.forward_features(x_)[:, 1:]   # [B, 256, dim]
                 pred_aux_feature = self.aux_decoder(z_latents, ids_restore=ids_restore)
                 
+                # only compute the aux loss on visible tokens
                 # if ids_keep is not None:
                 #     expanded_ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, aux_feature.shape[-1])
                 #     aux_feature = torch.gather(aux_feature, dim=1, index=expanded_ids_keep)
                 #     pred_aux_feature = torch.gather(pred_aux_feature, dim=1, index=expanded_ids_keep)
             else:
                 raise ValueError(f"Unknown foundation model type: {self.aux_model_type}")
+        else:
+            aux_feature = None
+            pred_aux_feature = None
             
         decoded = self.decoder(z_latents, ids_restore=ids_restore)
 

@@ -171,9 +171,9 @@ def get_args_parser():
     parser.add_argument("--discriminator_start_epoch", default=20, type=int)
     parser.add_argument("--discriminator_weight", default=0.5, type=float)
     parser.add_argument("--kl_loss_weight", default=1e-6, type=float)
-    parser.add_argument("--vf_loss_weight", default=0.0, type=float)
-    parser.add_argument("--aux_loss", default="cosine", type=str)
-    parser.add_argument("--aux_loss_weight", default=0.0, type=float)
+    parser.add_argument("--vf_loss_weight", default=0.1, type=float)
+    parser.add_argument("--aux_loss_type", default="cosine", type=str)
+    parser.add_argument("--aux_loss_weight", default=1.0, type=float)
 
     # logging parameters
     parser.add_argument("--output_dir", default="./work_dirs")

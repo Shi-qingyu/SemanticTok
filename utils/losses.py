@@ -376,16 +376,16 @@ class VFLoss(nn.Module):
 
 
 class AuxLoss(nn.Module):
-    def __init__(self, aux_loss: str = "cosine"):
+    def __init__(self, aux_loss_type: str = "cosine"):
         super().__init__()
-        self.aux_loss = aux_loss
+        self.aux_loss = aux_loss_type
 
     def forward(self, aux_feature, pred_aux_feature):
-        if self.aux_loss == "l2":
+        if self.aux_loss_type == "l2":
             aux_loss = F.mse_loss(aux_feature, pred_aux_feature, reduction="mean")
-        elif self.aux_loss == "l1":
+        elif self.aux_loss_type == "l1":
             aux_loss = F.l1_loss(aux_feature, pred_aux_feature, reduction="mean")
-        elif self.aux_loss == "cosine":
+        elif self.aux_loss_type == "cosine":
             aux_feature = F.normalize(aux_feature, dim=-1)
             pred_aux_feature = F.normalize(pred_aux_feature, dim=-1)
             
@@ -406,7 +406,7 @@ class ReconstructionLoss(nn.Module):
         reconstruction_loss: str = "l2",
         reconstruction_weight: float = 1.0,
         vf_weight: float = 0.0,
-        aux_loss: str = "cosine",
+        aux_loss_type: str = "cosine",
         aux_weight: float = 0.0,
         kl_weight: float = 1e-6,
         logvar_init: float = 0.0,
@@ -428,7 +428,7 @@ class ReconstructionLoss(nn.Module):
         self.vf_loss = VFLoss()
         
         self.aux_weight = aux_weight
-        self.aux_loss = AuxLoss(aux_loss)
+        self.aux_loss = AuxLoss(aux_loss_type)
 
         # `requires_grad` must be false to avoid ddp error. No guarantee this implementationis right though.
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init, requires_grad=False)
