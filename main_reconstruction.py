@@ -158,6 +158,7 @@ def get_args_parser():
     parser.add_argument("--vf_model_type", default="dinov2", type=str)
     
     parser.add_argument("--use_aux_decoder", action="store_true")
+    parser.add_argument("--use_second_last_feature", action="store_true")
     parser.add_argument("--vit_aux_model_size", default="tiny", type=str)
     parser.add_argument("--aux_model_type", default="dinov2", type=str)
 

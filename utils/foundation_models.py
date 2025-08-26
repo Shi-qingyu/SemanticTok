@@ -15,10 +15,10 @@ def create_foundation_model(model_type: str = "dinov2"):
             
             foundation_model = timm.create_model("vit_large_patch14_dinov2.lvd142m", pretrained=False, dynamic_img_size=True)
             foundation_model.load_state_dict(state_dict["model_state_dict"])
-            logger.info(f"[Foundation Model] Loaded foundation model from {ckpt_path}")            
+            logger.info(f"[Foundation Model] Loaded foundation model DINOv2 from {ckpt_path}")            
         else:
             foundation_model = timm.create_model("vit_large_patch14_dinov2.lvd142m", pretrained=True, dynamic_img_size=True)
-            logger.info(f"[Foundation Model] Loaded foundation model from timm")
+            logger.info(f"[Foundation Model] Loaded foundation model DINOv2 from timm")
         
         return foundation_model
     elif model_type == "clip":
@@ -29,10 +29,10 @@ def create_foundation_model(model_type: str = "dinov2"):
 
             foundation_model = timm.create_model("vit_large_patch14_clip.lvd142m", pretrained=False, dynamic_img_size=True)
             foundation_model.load_state_dict(state_dict["model_state_dict"])
-            logger.info(f"[Foundation Model] Loaded foundation model from {ckpt_path}")
+            logger.info(f"[Foundation Model] Loaded foundation model CLIP from {ckpt_path}")
         else:
             foundation_model = timm.create_model("vit_large_patch14_clip.lvd142m", pretrained=True, dynamic_img_size=True)
-            logger.info(f"[Foundation Model] Loaded foundation model from timm")
+            logger.info(f"[Foundation Model] Loaded foundation model CLIP from timm")
 
         return foundation_model
     else:

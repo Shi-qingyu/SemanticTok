@@ -241,7 +241,7 @@ class Encoder(nn.Module):
         )
 
         # learnable embeddings
-        scale = width**-0.5
+        scale = width ** -0.5
         self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
 
         # transformer layers
@@ -308,7 +308,7 @@ class Encoder(nn.Module):
         x = self.ln_pre(x)
         for block in self.transformer:
             x = block(x, rope)
-        second_last_feature = x
+        second_last_feature = x.clone()
         
         x = self.ln_post(x)
 
@@ -416,6 +416,7 @@ class DeTok(nn.Module):
         token_channels: int = 16,
         use_vf: bool = False,
         use_aux_decoder: bool = False,
+        use_second_last_feature: bool = False,
         vf_model_type: str = "dinov2",
         aux_model_type: str = "dinov2",
         mask_ratio: float = 0.75,
@@ -456,7 +457,8 @@ class DeTok(nn.Module):
         self.vf_model_type = vf_model_type
         self.use_aux_decoder = use_aux_decoder
         self.aux_model_type = aux_model_type
-
+        self.use_second_last_feature = use_second_last_feature
+        
         # initialize weights
         self.apply(self._init_weights)
 
@@ -483,7 +485,7 @@ class DeTok(nn.Module):
                     img_size=img_size,
                     patch_size=patch_size,
                     model_size=vit_aux_model_size,
-                    token_channels=token_channels,
+                    token_channels=token_channels if not use_second_last_feature else self.width,
                     aux_embed_dim=aux_feature_dim,
                 )
 
@@ -602,7 +604,11 @@ class DeTok(nn.Module):
                 x_ = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
                 
                 aux_feature = self.aux_foundation_model.forward_features(x_)[:, 1:]   # [B, 256, dim]
-                pred_aux_feature = self.aux_decoder(z_latents, ids_restore=ids_restore)
+                
+                if self.use_second_last_feature:
+                    pred_aux_feature = self.aux_decoder(second_last_feature, ids_restore=ids_restore)
+                else:
+                    pred_aux_feature = self.aux_decoder(z_latents, ids_restore=ids_restore)
                 
                 # only compute the aux loss on visible tokens
                 # if ids_keep is not None:

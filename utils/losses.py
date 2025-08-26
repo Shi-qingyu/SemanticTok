@@ -378,7 +378,7 @@ class VFLoss(nn.Module):
 class AuxLoss(nn.Module):
     def __init__(self, aux_loss_type: str = "cosine"):
         super().__init__()
-        self.aux_loss = aux_loss_type
+        self.aux_loss_type = aux_loss_type
 
     def forward(self, aux_feature, pred_aux_feature):
         if self.aux_loss_type == "l2":
@@ -391,6 +391,8 @@ class AuxLoss(nn.Module):
             
             aux_loss = -(aux_feature * pred_aux_feature).sum(dim=-1, keepdim=True)
             aux_loss = aux_loss.mean()
+        else:
+            raise ValueError(f"unsupported aux_loss_type {self.aux_loss_type}")
         
         return aux_loss
 
