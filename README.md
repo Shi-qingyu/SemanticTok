@@ -10,16 +10,15 @@ pip install -r requirements.txt
 ```
 
 ### Dataset
-Create `data/` folder by `mkdir data/` then download [ImageNet](http://image-net.org/download) dataset. You can either:
-1. Download it directly to `data/imagenet/` 
-2. Create a symbolic link: `ln -s /path/to/your/imagenet data/imagenet`
-
+Download ImageNet1K through:
+```bash
+bash prepare_imagenet.sh
+```
 
 ### Download Required Files
 
 Create data directory and download required files:
 ```bash
-mkdir data/
 # Download everything from huggingface
 huggingface-cli download jjiaweiyang/l-DeTok --local-dir released_model
 mv released_model/train.txt data/
@@ -41,7 +40,11 @@ data/
 │   └── val_fid_statistics_file.npz
 ├── imagenet/           # ImageNet dataset (or symlink)
 │   ├── train/
+│   │   ├──n01440764
+│   │   └──n01443537
 │   └── val/
+│       ├──n01440764
+│       └──n01443537
 ├── imagenet-val-prc/   # Precision-recall data
 ├── train.txt           # Training file list
 └── val.txt             # Validation file list
@@ -54,15 +57,16 @@ data/
 Train DeTok tokenizer with denoising:
 ```bash
 project=tokenizer_training
-exp_name=detokBB-g3.0-m0.7-200ep
-batch_size=32  # global batch size = batch_size x num_nodes x 8 = 1024
-num_nodes=4    # adjust for your multi-node setup
+exp_name=detokBB-tokch-16-g3.0-m0.7-aux1.0-200ep
+batch_size=64  # global batch size = batch_size x num_nodes x 8 = 1024
+num_nodes=2    # adjust for your multi-node setup
 
 torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
     main_reconstruction.py \
     --project $project --exp_name $exp_name --auto_resume \
-    --batch_size $batch_size --model detok_BB \
-    --gamma 3.0 --mask_ratio 0.7 --random_mask_ratio \
+    --batch_size $batch_size \
+    --model detok_BB --token_channels 16 \
+    --gamma 3.0 --mask_ratio 0.7 \
     --use_aux_decoder --aux_loss_weight 1.0 \
     --online_eval \
     --epochs 200 --discriminator_start_epoch 100 \
@@ -74,11 +78,11 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
 Train SiT-base (100 epochs):
 ```bash
 tokenizer_project=tokenizer_training
-tokenizer_exp_name=detokBB-g3.0-m0.7-200ep-decoder_ft-100ep
+tokenizer_exp_name=detokBB-tokch-16-g3.0-m0.7-aux1.0-200ep  # should be same as exp_name in the tokenizer training script
 project=gen_model_training
 exp_name=sit_base-${tokenizer_exp_name}
-batch_size=32
-num_nodes=4
+batch_size=64
+num_nodes=2
 epochs=100
 
 torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
@@ -86,7 +90,7 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
     --project $project --exp_name $exp_name --auto_resume \
     --batch_size $batch_size --epochs $epochs --use_aligned_schedule \
     --tokenizer detok_BB --use_ema_tokenizer --collect_tokenizer_stats \
-    --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl \
+    --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl --overwrite_stats \
     --load_tokenizer_from work_dirs/$tokenizer_project/$tokenizer_exp_name/checkpoints/latest.pth \
     --model SiT_base \
     --num_sampling_steps 250 --cfg 1.6 \
