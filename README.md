@@ -57,7 +57,7 @@ data/
 Train DeTok tokenizer with denoising:
 ```bash
 project=tokenizer_training
-exp_name=detokBB-tokch-16-g3.0-m0.7-aux1.0-200ep
+exp_name=detokBB-tokch-16-g3.0-m0.0-aux1.0-200ep
 batch_size=64  # global batch size = batch_size x num_nodes x 8 = 1024
 num_nodes=2    # adjust for your multi-node setup
 
@@ -66,7 +66,7 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
     --project $project --exp_name $exp_name --auto_resume \
     --batch_size $batch_size \
     --model detok_BB --token_channels 16 \
-    --gamma 3.0 --mask_ratio 0.7 \
+    --gamma 3.0 --mask_ratio 0.0 \
     --use_aux_decoder --aux_loss_weight 1.0 \
     --online_eval \
     --epochs 200 --discriminator_start_epoch 100 \
@@ -78,7 +78,7 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
 Train SiT-base (100 epochs):
 ```bash
 tokenizer_project=tokenizer_training
-tokenizer_exp_name=detokBB-tokch-16-g3.0-m0.7-aux1.0-200ep  # should be same as exp_name in the tokenizer training script
+tokenizer_exp_name=detokBB-tokch-16-g3.0-m0.0-aux1.0-200ep  # should be same as exp_name in the tokenizer training script
 project=gen_model_training
 exp_name=sit_base-${tokenizer_exp_name}
 batch_size=64
@@ -89,7 +89,8 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
     main_diffusion.py \
     --project $project --exp_name $exp_name --auto_resume \
     --batch_size $batch_size --epochs $epochs --use_aligned_schedule \
-    --tokenizer detok_BB --use_ema_tokenizer --collect_tokenizer_stats \
+    --tokenizer detok_BB --token_channels 16 \
+    --use_ema_tokenizer --collect_tokenizer_stats \
     --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl --overwrite_stats \
     --load_tokenizer_from work_dirs/$tokenizer_project/$tokenizer_exp_name/checkpoints/latest.pth \
     --model SiT_base \
