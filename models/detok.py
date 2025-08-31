@@ -475,18 +475,39 @@ class DeTok(nn.Module):
                 raise ValueError(f"Unknown foundation model type: {vf_model_type}")
         
         if use_aux_decoder:
-            if aux_model_type == "dinov2":
-                self.aux_foundation_model = create_foundation_model(aux_model_type)
-                self.aux_foundation_model.eval()
-                self.aux_foundation_model.requires_grad_(False)
+            self.aux_foundation_models = nn.ModuleDict()
+            self.aux_foundation_models_transforms = dict()
+            self.aux_decoders = nn.ModuleDict()
+
+            if "dinov2" in aux_model_type:
+                aux_foundation_model, transforms = create_foundation_model("dinov2")
+                aux_foundation_model.eval()
+                aux_foundation_model.requires_grad_(False)
+                self.aux_foundation_models["dinov2"] = aux_foundation_model
+                self.aux_foundation_models_transforms["dinov2"] = transforms
                 
-                aux_feature_dim = self.aux_foundation_model.num_features
-                self.aux_decoder = AuxiliaryDecoder(
+                self.aux_decoders["dinov2"] = AuxiliaryDecoder(
                     img_size=img_size,
                     patch_size=patch_size,
                     model_size=vit_aux_model_size,
                     token_channels=token_channels if not use_second_last_feature else self.width,
-                    aux_embed_dim=aux_feature_dim,
+                    aux_embed_dim=aux_foundation_model.num_features,
+                )
+    
+            
+            if "siglip" in aux_model_type:
+                aux_foundation_model, transforms = create_foundation_model("siglip")
+                aux_foundation_model.eval()
+                aux_foundation_model.requires_grad_(False)
+                self.aux_foundation_models["siglip"] = aux_foundation_model
+                self.aux_foundation_models_transforms["siglip"] = transforms
+                
+                self.aux_decoders["siglip"] = AuxiliaryDecoder(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    model_size=vit_aux_model_size,
+                    token_channels=token_channels if not use_second_last_feature else self.width,
+                    aux_embed_dim=aux_foundation_model.num_features,
                 )
 
         # setup to-posteriors function
@@ -600,26 +621,39 @@ class DeTok(nn.Module):
             vf_feature = None
 
         if self.use_aux_decoder and self.training:
-            if self.aux_model_type == "dinov2":
-                x_ = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
-                
-                aux_feature = self.aux_foundation_model.forward_features(x_)[:, 1:]   # [B, 256, dim]
-                
-                if self.use_second_last_feature:
-                    pred_aux_feature = self.aux_decoder(second_last_feature, ids_restore=ids_restore)
+            x_aux = (x + 1.0) * 0.5
+            aux_features = []
+            pred_aux_features = []
+            for model_type in self.aux_foundation_models.keys():
+                aux_foundation_model = self.aux_foundation_models[model_type]
+                transforms = self.aux_foundation_models_transforms[model_type]
+                aux_decoder = self.aux_decoders[model_type]
+
+                if model_type == "dinov2":
+                    x_dino = transforms(x_aux)
+                    x_dino = F.interpolate(x_dino, size=(224, 224), mode='bilinear', align_corners=False)
+                    x_dino = x_dino.to(dtype=x.dtype)
+                    aux_features.append(aux_foundation_model.forward_features(x_dino)[:, 1:])   # [B, 256, dim]
+                    
+                    if self.use_second_last_feature:
+                        pred_aux_features.append(aux_decoder(second_last_feature, ids_restore=ids_restore))
+                    else:
+                        pred_aux_features.append(aux_decoder(z_latents, ids_restore=ids_restore))
+                elif model_type == "siglip":
+                    x_siglip = transforms(x_aux)
+                    x_siglip = x_siglip.to(dtype=x.dtype)
+                    aux_features.append(aux_foundation_model.forward_features(x_siglip))   # [B, 256, dim]
+                    
+                    if self.use_second_last_feature:
+                        pred_aux_features.append(aux_decoder(second_last_feature, ids_restore=ids_restore))
+                    else:
+                        pred_aux_features.append(aux_decoder(z_latents, ids_restore=ids_restore))
                 else:
-                    pred_aux_feature = self.aux_decoder(z_latents, ids_restore=ids_restore)
+                    raise ValueError(f"Unknown foundation model type: {model_type}")
                 
-                # only compute the aux loss on visible tokens
-                # if ids_keep is not None:
-                #     expanded_ids_keep = ids_keep.unsqueeze(-1).expand(-1, -1, aux_feature.shape[-1])
-                #     aux_feature = torch.gather(aux_feature, dim=1, index=expanded_ids_keep)
-                #     pred_aux_feature = torch.gather(pred_aux_feature, dim=1, index=expanded_ids_keep)
-            else:
-                raise ValueError(f"Unknown foundation model type: {self.aux_model_type}")
         else:
-            aux_feature = None
-            pred_aux_feature = None
+            aux_features = None
+            pred_aux_features = None
             
         decoded = self.decoder(z_latents, ids_restore=ids_restore)
 
@@ -628,8 +662,8 @@ class DeTok(nn.Module):
             z_latents=z_latents,
             ids_restore=ids_restore,
             vf_feature=vf_feature,
-            aux_feature=aux_feature,
-            pred_aux_feature=pred_aux_feature,
+            aux_features=aux_features,
+            pred_aux_features=pred_aux_features,
         )
 
         return decoded, result_dict

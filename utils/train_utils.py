@@ -228,8 +228,8 @@ def train_one_epoch_tokenizer(
                 z_latents = result_dict.get("z_latents", None)
                 ids_restore = result_dict.get("ids_restore", None)
                 vf_feature = result_dict.get("vf_feature", None)
-                aux_feature = result_dict.get("aux_feature", None)
-                pred_aux_feature = result_dict.get("pred_aux_feature", None)
+                aux_features = result_dict.get("aux_features", None)
+                pred_aux_features = result_dict.get("pred_aux_features", None)
             else:
                 raise ValueError(f"Invalid result_dict type: {type(result_dict)}")
                 
@@ -243,8 +243,8 @@ def train_one_epoch_tokenizer(
                 posteriors=posteriors,
                 z_latents=z_latents,
                 vf_feature=vf_feature,
-                aux_feature=aux_feature,
-                pred_aux_feature=pred_aux_feature,
+                aux_features=aux_features,
+                pred_aux_features=pred_aux_features,
                 mode="generator",
             )
 

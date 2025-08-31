@@ -457,8 +457,8 @@ class ReconstructionLoss(nn.Module):
         posteriors: DiagonalGaussianDistribution | None = None,
         z_latents: Tensor | None = None,
         vf_feature: Tensor | None = None,
-        aux_feature: Tensor | None = None,
-        pred_aux_feature: Tensor | None = None,
+        aux_features: Tensor | None = None,
+        pred_aux_features: Tensor | None = None,
         mode: str = "generator",
         last_layer=None,
     ) -> tuple[Tensor, dict[Text, Tensor]]:
@@ -481,7 +481,7 @@ class ReconstructionLoss(nn.Module):
             self._data_range_checked = True
 
         if mode == "generator":
-            return self._forward_generator(inputs, reconstructions, epoch, posteriors, z_latents, vf_feature, aux_feature, pred_aux_feature)
+            return self._forward_generator(inputs, reconstructions, epoch, posteriors, z_latents, vf_feature, aux_features, pred_aux_features)
         elif mode == "discriminator":
             return self._forward_discriminator(inputs, reconstructions, epoch)
         else:
@@ -498,8 +498,8 @@ class ReconstructionLoss(nn.Module):
         posteriors: DiagonalGaussianDistribution | None = None,
         z_latents: Tensor | None = None,
         vf_feature: Tensor | None = None,
-        aux_feature: Tensor | None = None,
-        pred_aux_feature: Tensor | None = None,
+        aux_features: Tensor | None = None,
+        pred_aux_features: Tensor | None = None,
     ) -> tuple[Tensor, dict[Text, Tensor]]:
         """generator training step"""
         inputs = inputs.contiguous()
@@ -546,8 +546,10 @@ class ReconstructionLoss(nn.Module):
             vf_loss = self.vf_loss(z_latents, vf_feature)
         
         aux_loss = torch.zeros((), device=inputs.device)
-        if aux_feature is not None and pred_aux_feature is not None:
-            aux_loss = self.aux_loss(aux_feature, pred_aux_feature)
+        if aux_features is not None and pred_aux_features is not None:
+            for aux_feature, pred_aux_feature in zip(aux_features, pred_aux_features):
+                aux_loss += self.aux_loss(aux_feature, pred_aux_feature)
+            aux_loss /= len(aux_features)
 
         total_loss = (
             reconstruction_loss
