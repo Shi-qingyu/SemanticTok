@@ -136,20 +136,18 @@ def create_generation_model(args):
                 img_size=args.img_size,
                 patch_size=args.tokenizer_patch_size,
                 token_channels=args.token_channels,
-                use_second_last_feature=args.use_second_last_feature if hasattr(args, "use_second_last_feature") else False,
                 gamma=0.0,
                 mask_ratio=0.0,
-                use_vf=False,
-                use_aux_decoder=False,
+                use_second_last_feature=args.use_second_last_feature if hasattr(args, "use_second_last_feature") else False,
+                pretrained_model_name_or_path=args.pretrained_model_name_or_path if hasattr(args, "pretrained_model_name_or_path") else None,
             )
         elif args.tokenizer in models.DeAE_models:
             tokenizer: nn.Module = models.DeAE_models[args.tokenizer](
                 img_size=args.img_size,
                 patch_size=args.tokenizer_patch_size,
                 token_channels=args.token_channels,
-                use_second_last_feature=args.use_second_last_feature if hasattr(args, "use_second_last_feature") else False,
+                gamma=0.0,
                 mask_ratio=0.0,
-                random_mask_ratio=False,
             )
         else:
             raise ValueError(f"Unsupported tokenizer {args.tokenizer}")
@@ -282,6 +280,8 @@ def create_reconstruction_model(args):
             token_channels=args.token_channels,
             mask_ratio=args.mask_ratio,
             gamma=args.gamma,
+            pretrained_model_name_or_path=args.pretrained_model_name_or_path if hasattr(args, "pretrained_model_name_or_path") else None,
+            frozen_dinov3=args.frozen_dinov3 if hasattr(args, "frozen_dinov3") else True,
             random_mask_ratio=args.random_mask_ratio if hasattr(args, "random_mask_ratio") else True,
             vf_model_type=args.vf_model_type if hasattr(args, "vf_model_type") else "",
             aux_model_type=args.aux_model_type if hasattr(args, "aux_model_type") else "",

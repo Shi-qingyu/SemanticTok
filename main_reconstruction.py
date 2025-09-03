@@ -148,6 +148,8 @@ def get_args_parser():
     parser.add_argument("--token_channels", default=16, type=int)
     parser.add_argument("--img_size", default=256, type=int)
     parser.add_argument("--patch_size", default=16, type=int)
+    parser.add_argument("--pretrained_model_name_or_path", default=None, type=str)
+    parser.add_argument("--frozen_dinov3", default=True, type=bool)
 
     parser.add_argument("--mask_ratio", default=0.0, type=float)
     parser.add_argument("--w", action="store_true")

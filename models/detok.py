@@ -1,3 +1,4 @@
+from typing import Optional
 import logging
 import random
 from functools import partial
@@ -16,6 +17,8 @@ from models.model_utils import SIZE_DICT
 
 from .autoencoder import DiagonalGaussianDistribution
 from utils.foundation_models import create_foundation_model
+
+from transformers import AutoImageProcessor, AutoModel
 
 logger = logging.getLogger("DeTok")
 
@@ -118,88 +121,6 @@ class Block(nn.Module):
         x = x + self.attn(self.norm1(x), rope=rope)
         x = x + self.mlp(self.norm2(x))
         return x
-
-
-# ================================
-# Auxiliary Decoder
-# ================================
-
-
-class AuxiliaryDecoder(nn.Module):
-    """auxiliary decoder for training the model."""
-    
-    def __init__(
-        self, 
-        img_size: int = 256,
-        patch_size: int = 16,
-        model_size: str = "base", 
-        token_channels: int = 16,
-        aux_embed_dim: int = 1024,
-    ):
-        super().__init__()
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.grid_size = self.img_size // self.patch_size
-        self.seq_len = self.grid_size ** 2
-        
-        self.model_size = model_size
-        size_dict = SIZE_DICT[self.model_size]
-        num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
-        self.width = width
-        
-        self.token_channels = token_channels
-        self.aux_embed_dim = aux_embed_dim
-        
-        # learnable embeddings
-        scale = width ** -0.5
-        self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
-        
-        # token embedding
-        self.token_embedding = nn.Linear(self.token_channels, width)
-        
-        # mask embedding
-        self.mask_embedding = nn.Parameter(torch.zeros(1, 1, width))
-        
-        # transformer layers
-        norm_layer = partial(nn.RMSNorm, eps=1e-6)
-        self.ln_pre = norm_layer(width)
-        self.transformer = nn.ModuleList(
-            [Block(dim=width, num_heads=num_heads, norm_layer=norm_layer) for _ in range(num_layers)]
-        )
-        self.ln_post = norm_layer(width)
-        
-        # output layers
-        self.out = nn.Linear(self.width, self.aux_embed_dim)
-
-        # rotary position embedding
-        head_dim = self.transformer[0].attn.head_dim
-        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size).unsqueeze(0)
-        self.register_buffer("rope_tensor", rope_tensor, persistent=False)
-
-        params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
-        logger.info(f"[DeTok-AuxiliaryDecoder] params: {params_M:.2f}M, {model_size}-{num_layers}-{width}")
-    
-    def forward(self, z_latents: Tensor, ids_restore: Tensor | None = None):
-        """forward pass through auxiliary decoder."""
-        z = self.token_embedding(z_latents)
-        bsz, seq_len, _ = z.shape
-
-        if ids_restore is not None:
-            num_mask_tokens = ids_restore.shape[1] + 1 - seq_len
-            mask_tokens = self.mask_embedding.repeat(bsz, num_mask_tokens, 1)
-            z_ = torch.cat([z, mask_tokens], dim=1)
-            expanded_ids_restore = ids_restore.unsqueeze(-1).expand(-1, -1, z_.shape[-1])
-            z = torch.gather(z_, dim=1, index=expanded_ids_restore)
-        
-        z = z + self.positional_embedding
-        
-        z = self.ln_pre(z)
-        rope = self.rope_tensor.expand(bsz, -1, -1)
-        for block in self.transformer:
-            z = block(z, rope=rope)
-        z = self.ln_post(z)
-        
-        return self.out(z)
 
 
 # ================================
@@ -317,6 +238,68 @@ class Encoder(nn.Module):
         return tokens, ids_restore, ids_keep, second_last_feature
 
 
+class DINOv3Encoder(nn.Module):
+    """vision Transformer encoder with masked autoencoding capability."""
+
+    def __init__(
+        self,
+        pretrained_model_name_or_path: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        frozen_dinov3: bool = True,
+        img_size: int = 256,
+        token_channels: int = 16,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        self.processor = AutoImageProcessor.from_pretrained(pretrained_model_name_or_path)
+        self.model = AutoModel.from_pretrained(pretrained_model_name_or_path)
+        self.frozen_dinov3 = frozen_dinov3
+        if frozen_dinov3:
+            self.model.eval()
+            self.model.requires_grad_(False)
+        self.config = self.model.config
+        self.img_size = img_size
+        # needs to split into mean and std
+        self.token_channels = token_channels * 2
+
+        # output layer
+        self.width = self.config.hidden_size
+        norm_layer = partial(nn.RMSNorm, eps=1e-6)
+        self.ln_post = norm_layer(self.width)
+        self.latent_head = nn.Linear(self.width, self.token_channels)
+
+        total_params_M = sum(p.numel() for p in self.parameters()) / 1e6
+        trainable_params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
+        logger.info(
+            f"[DeTok-Encoder] params: total {total_params_M:.2f}M, trainable {trainable_params_M:.2f}M, DINOv3 {os.path.basename(pretrained_model_name_or_path)}"
+        )
+
+    def forward(self, x: Tensor):
+        """forward pass through encoder."""
+        x = (x + 1) * 0.5
+        x = (x * 255).to(torch.uint8)
+        inputs = self.processor(x, return_tensors="pt").to(self.model.device)
+        inputs["pixel_values"] = F.interpolate(
+            inputs["pixel_values"], 
+            size=(self.img_size, self.img_size), 
+            mode="bilinear", 
+            align_corners=False
+        )
+        if self.frozen_dinov3:
+            with torch.inference_mode():
+                outputs = self.model(**inputs)
+            x = outputs.last_hidden_state
+        else:
+            x = self.model(**inputs).last_hidden_state
+            
+        x = x[:, 1 + self.config.num_register_tokens:, :]
+        second_last_feature = x.clone()
+        
+        x = self.ln_post(x)
+        tokens = self.latent_head(x)
+
+        return tokens, None, None, second_last_feature
+
+
 class Decoder(nn.Module):
     """vision Transformer decoder with mask tokens for image reconstruction."""
 
@@ -395,6 +378,88 @@ class Decoder(nn.Module):
 
 
 # ================================
+# Auxiliary Decoder
+# ================================
+
+
+class AuxiliaryDecoder(nn.Module):
+    """auxiliary decoder for training the model."""
+    
+    def __init__(
+        self, 
+        img_size: int = 256,
+        patch_size: int = 16,
+        model_size: str = "base", 
+        token_channels: int = 16,
+        aux_embed_dim: int = 1024,
+    ):
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.grid_size = self.img_size // self.patch_size
+        self.seq_len = self.grid_size ** 2
+        
+        self.model_size = model_size
+        size_dict = SIZE_DICT[self.model_size]
+        num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
+        self.width = width
+        
+        self.token_channels = token_channels
+        self.aux_embed_dim = aux_embed_dim
+        
+        # learnable embeddings
+        scale = width ** -0.5
+        self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
+        
+        # token embedding
+        self.token_embedding = nn.Linear(self.token_channels, width)
+        
+        # mask embedding
+        self.mask_embedding = nn.Parameter(torch.zeros(1, 1, width))
+        
+        # transformer layers
+        norm_layer = partial(nn.RMSNorm, eps=1e-6)
+        self.ln_pre = norm_layer(width)
+        self.transformer = nn.ModuleList(
+            [Block(dim=width, num_heads=num_heads, norm_layer=norm_layer) for _ in range(num_layers)]
+        )
+        self.ln_post = norm_layer(width)
+        
+        # output layers
+        self.out = nn.Linear(self.width, self.aux_embed_dim)
+
+        # rotary position embedding
+        head_dim = self.transformer[0].attn.head_dim
+        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size).unsqueeze(0)
+        self.register_buffer("rope_tensor", rope_tensor, persistent=False)
+
+        params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
+        logger.info(f"[DeTok-AuxiliaryDecoder] params: {params_M:.2f}M, {model_size}-{num_layers}-{width}")
+    
+    def forward(self, z_latents: Tensor, ids_restore: Tensor | None = None):
+        """forward pass through auxiliary decoder."""
+        z = self.token_embedding(z_latents)
+        bsz, seq_len, _ = z.shape
+
+        if ids_restore is not None:
+            num_mask_tokens = ids_restore.shape[1] + 1 - seq_len
+            mask_tokens = self.mask_embedding.repeat(bsz, num_mask_tokens, 1)
+            z_ = torch.cat([z, mask_tokens], dim=1)
+            expanded_ids_restore = ids_restore.unsqueeze(-1).expand(-1, -1, z_.shape[-1])
+            z = torch.gather(z_, dim=1, index=expanded_ids_restore)
+        
+        z = z + self.positional_embedding
+        
+        z = self.ln_pre(z)
+        rope = self.rope_tensor.expand(bsz, -1, -1)
+        for block in self.transformer:
+            z = block(z, rope=rope)
+        z = self.ln_post(z)
+        
+        return self.out(z)
+
+
+# ================================
 # Main DeTok Model
 # ================================
 
@@ -411,13 +476,15 @@ class DeTok(nn.Module):
         img_size: int = 256,
         patch_size: int = 16,
         vit_enc_model_size: str = "small",
+        pretrained_model_name_or_path: Optional[str] = None,
+        frozen_dinov3: bool = True,
         vit_dec_model_size: str = "base",
         vit_aux_model_size: str = "tiny",
         token_channels: int = 16,
         use_adaptive_channels: bool = False,
         use_second_last_feature: bool = False,
-        vf_model_type: str = "dinov2",
-        aux_model_type: str = "dinov2",
+        vf_model_type: str = "",
+        aux_model_type: str = "",
         mask_ratio: float = 0.75,
         random_mask_ratio: bool = True,
         gamma: float = 3.0,
@@ -430,14 +497,22 @@ class DeTok(nn.Module):
         super().__init__()
 
         # initialize encoder and decoder
-        self.encoder = Encoder(
-            img_size=img_size,
-            patch_size=patch_size,
-            model_size=vit_enc_model_size,
-            token_channels=token_channels,
-            mask_ratio=mask_ratio,
-            random_mask_ratio=random_mask_ratio,
-        )
+        if pretrained_model_name_or_path is not None:
+            self.encoder = DINOv3Encoder(
+                pretrained_model_name_or_path=pretrained_model_name_or_path,
+                frozen_dinov3=frozen_dinov3,
+                img_size=img_size,
+                token_channels=token_channels,
+            )
+        else:
+            self.encoder = Encoder(
+                img_size=img_size,
+                patch_size=patch_size,
+                model_size=vit_enc_model_size,
+                token_channels=token_channels,
+                mask_ratio=mask_ratio,
+                random_mask_ratio=random_mask_ratio,
+            )
         self.decoder = Decoder(
             img_size=img_size,
             patch_size=patch_size,
@@ -447,7 +522,7 @@ class DeTok(nn.Module):
 
         # model configuration
         self.seq_h = img_size // patch_size
-        self.width = SIZE_DICT[vit_enc_model_size]["width"]
+        self.width = self.encoder.width
         self.token_channels = token_channels
         self.use_additive_noise = use_additive_noise
         self.gamma = gamma
@@ -631,7 +706,7 @@ class DeTok(nn.Module):
             vf_feature = None
 
         if self.use_aux and self.training:
-            x_aux = x * 0.5 + 1.0
+            x_aux = (x + 1) * 0.5
             aux_features = []
             pred_aux_features = []
 
