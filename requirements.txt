@@ -1,21 +1,38 @@
+# Core ML Dependencies
 --extra-index-url https://download.pytorch.org/whl/cu124
 torch==2.6.0+cu124
-timm
-scipy
-einops
-wandb
-matplotlib
-diffusers
-torchtnt
-rich
-# git+https://github.com/LTH14/torch-fidelity.git@master#egg=torch-fidelity
-huggingface_hub
+torchvision==0.21.0+cu124
 
-black
-pylint
-flake8
-isort
-jaxtyping
-torchdiffeq
-gdown
-ipykernel
+# Essential ML Libraries
+timm==1.0.19
+transformers==4.56.1
+diffusers==0.35.1
+peft==0.17.0
+huggingface_hub==0.34.4
+
+# Scientific Computing
+scipy==1.14.0
+numpy==1.26.4
+einops==0.8.0
+matplotlib==3.9.2
+
+# Training & Utilities
+wandb==0.20.1
+torchtnt==0.2.4
+torchdiffeq==0.2.5
+rich==13.7.1
+jaxtyping==0.3.2
+
+# Data Processing
+gdown==5.2.0
+datasets==3.6.0
+
+# Development Tools
+black==24.8.0
+pylint==3.3.8
+flake8==7.3.0
+isort==5.13.2
+ipykernel==6.29.5
+
+# Note: flash-attn removed due to compatibility issues with PyTorch 2.6.0
+# Use --install-option="--disable-flash-attn" if needed for transformers
