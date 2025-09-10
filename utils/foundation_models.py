@@ -3,7 +3,13 @@ import logging
 
 import torch
 import timm
-from transformers import AutoImageProcessor, AutoModel
+from transformers import (
+    AutoImageProcessor, 
+    AutoModel,
+    SamVisionModel,
+    SamImageProcessor,
+    SamVisionConfig,
+)
 
 logger = logging.getLogger("DeTok")
 
@@ -43,6 +49,51 @@ def create_foundation_model(model_type: str = "dinov2"):
             logger.info(f"[Foundation Model] Loaded foundation model DINOv3 from transformers")
 
         return foundation_model, transforms
+
+    elif model_type == "sam":
+        ckpt_path = os.path.join("offline_models", "sam-vit-large")
+        if os.path.exists(ckpt_path):
+            cfg = SamVisionConfig.from_pretrained(ckpt_path)
+            cfg.image_size = 256
+            cfg.use_abs_pos = False
+            cfg.use_rel_pos = False
+            
+            transforms = SamImageProcessor.from_pretrained(ckpt_path)
+            foundation_model = SamVisionModel.from_pretrained(
+                ckpt_path,
+                config=cfg,
+                ignore_mismatched_sizes=True,
+                low_cpu_mem_usage=True,
+            )
+            logger.info(f"[Foundation Model] Loaded foundation model SAM from {ckpt_path}")
+        else:
+            cfg = SamVisionConfig.from_pretrained("facebook/sam-vit-large")
+            cfg.image_size = 256
+            cfg.use_abs_pos = False
+            cfg.use_rel_pos = False
+            
+            transforms = SamImageProcessor.from_pretrained("facebook/sam-vit-large")
+            foundation_model = SamVisionModel.from_pretrained(
+                "facebook/sam-vit-large",
+                config=cfg,
+                ignore_mismatched_sizes=True,
+                low_cpu_mem_usage=True,
+            )
+            logger.info(f"[Foundation Model] Loaded foundation model SAM from transformers")
+
+        return foundation_model, transforms
+
+    elif model_type == "radio":
+        ckpt_path = os.path.join("offline_models", "radio_l_2.5.pt")
+        if os.path.exists(ckpt_path):
+            state_dict = torch.load(ckpt_path, map_location="cpu")
+            foundation_model = AutoModel.from_pretrained(ckpt_path, trust_remote_code=True)
+            logger.info(f"[Foundation Model] Loaded foundation model RADIO from {ckpt_path}")
+        else:
+            foundation_model = AutoModel.from_pretrained("nvidia/RADIO-L", trust_remote_code=True)
+            logger.info(f"[Foundation Model] Loaded foundation model RADIO from transformers")
+
+        return foundation_model, None
 
     elif model_type == "clip":
         ckpt_path = os.path.join("offline_models", "clip_vit_large_patch14", "pytorch_model.bin")

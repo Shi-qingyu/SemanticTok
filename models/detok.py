@@ -593,6 +593,36 @@ class DeTok(nn.Module):
                     aux_embed_dim=aux_foundation_model.config.hidden_size,
                 )
             
+            if "sam" in aux_model_type:
+                aux_foundation_model, transforms = create_foundation_model("sam")
+                aux_foundation_model.eval()
+                aux_foundation_model.requires_grad_(False)
+                self.aux_foundation_models["sam"] = aux_foundation_model
+                self.aux_foundation_models_transforms["sam"] = transforms
+                
+                self.aux_decoders["sam"] = AuxiliaryDecoder(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    model_size=vit_aux_model_size,
+                    token_channels=aux_token_channels,
+                    aux_embed_dim=aux_foundation_model.vision_encoder.config.output_channels,
+                )
+            
+            if "radio" in aux_model_type:
+                aux_foundation_model, transforms = create_foundation_model("radio")
+                aux_foundation_model.eval()
+                aux_foundation_model.requires_grad_(False)
+                self.aux_foundation_models["radio"] = aux_foundation_model
+                self.aux_foundation_models_transforms["radio"] = transforms
+                
+                self.aux_decoders["radio"] = AuxiliaryDecoder(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    model_size=vit_aux_model_size,
+                    token_channels=aux_token_channels,
+                    aux_embed_dim=1024,
+                )
+            
             if "siglip" in aux_model_type:
                 aux_foundation_model, transforms = create_foundation_model("siglip")
                 aux_foundation_model.eval()
@@ -758,6 +788,37 @@ class DeTok(nn.Module):
                         aux_feature = aux_foundation_model(**inputs).last_hidden_state
                         
                     aux_feature = aux_feature[:, 1 + aux_foundation_model.config.num_register_tokens:, :]
+                    aux_features.append(aux_feature)   # [B, 256, dim]
+                    pred_aux_features.append(aux_decoder(aux_z_latents, ids_restore=ids_restore))
+
+                elif model_type == "sam":
+                    x_sam = transforms(
+                        images=x_aux,
+                        do_resize=True,
+                        size={"longest_edge": 256},
+                        do_pad=True,
+                        pad_size={"height": 256, "width": 256},
+                        input_data_format="channels_first",
+                        do_rescale=False,
+                        do_normalize=True,
+                        return_tensors="pt",
+                    )
+                    pixel_values = x_sam["pixel_values"].to(dtype=x.dtype, device=x.device)
+                    with torch.inference_mode():
+                        aux_feature = aux_foundation_model(pixel_values)
+
+                    aux_feature = aux_feature.last_hidden_state
+                    B, C, H, W = aux_feature.shape
+                    aux_feature = aux_feature.permute(0, 2, 3, 1).reshape(B, H * W, C).contiguous()
+                    aux_features.append(aux_feature)   # [B, 256, dim]
+                    pred_aux_features.append(aux_decoder(aux_z_latents, ids_restore=ids_restore))
+
+                elif model_type == "radio":
+                    x_radio = x_aux
+                    x_radio = x_radio.to(dtype=x.dtype, device=x.device)
+                    with torch.inference_mode():
+                        _, aux_feature = aux_foundation_model(x_radio)   # [B, 256, dim]
+
                     aux_features.append(aux_feature)   # [B, 256, dim]
                     pred_aux_features.append(aux_decoder(aux_z_latents, ids_restore=ids_restore))
 
