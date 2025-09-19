@@ -258,6 +258,7 @@ class DualEncoder(nn.Module):
         mask_ratio: float = 0.75,
         mask_ratio_min: float = -0.1,
         random_mask_ratio: bool = True,
+        last_layer_feature: bool = False,
     ) -> None:
         super().__init__()
         self.img_size = img_size
@@ -270,6 +271,8 @@ class DualEncoder(nn.Module):
         self.mask_ratio_min = mask_ratio_min
         self.random_mask_ratio = random_mask_ratio
         self.seq_len = self.grid_size**2
+        
+        self.last_layer_feature = last_layer_feature
 
         size_dict = SIZE_DICT[self.model_size]
         num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
@@ -354,7 +357,10 @@ class DualEncoder(nn.Module):
                 x_visible = block(x_visible, rope_visible)
             x_visible = self.ln_post(x_visible)
             
-            z_visible = self.latent_head(x_visible)    # [bsz, visible_seq_len, token_channels]
+            if self.last_layer_feature:
+                z_visible = x_visible
+            else:
+                z_visible = self.latent_head(x_visible)    # [bsz, visible_seq_len, token_channels]
         else:
             z_visible = None
             ids_restore = None
@@ -790,6 +796,7 @@ class DeTok(nn.Module):
         vit_aux_model_size: str = "tiny",
         token_channels: int = 16,
         use_adaptive_channels: bool = False,
+        last_layer_feature: bool = True,
         vf_model_type: str = "",
         aux_model_type: str = "",
         aux_dec_type: str = "transformer",
@@ -834,6 +841,7 @@ class DeTok(nn.Module):
                 mask_ratio=mask_ratio,
                 mask_ratio_min=mask_ratio_min,
                 random_mask_ratio=mask_ratio_type.lower() == "random",
+                last_layer_feature=last_layer_feature,
             )
         else:
             self.encoder = Encoder(
@@ -892,6 +900,8 @@ class DeTok(nn.Module):
 
             if use_adaptive_channels:
                 aux_token_channels = self.token_channels // 2
+            elif pretrained_model_name_or_path == "dual" and last_layer_feature:
+                aux_token_channels = self.width
             else:
                 aux_token_channels = self.token_channels
 
@@ -1058,9 +1068,12 @@ class DeTok(nn.Module):
         z_latents = posteriors.sample() if sampling else posteriors.mean
         
         if isinstance(self.encoder, DualEncoder) and self.training:
-            z_visiable = ret["z_visible"]
-            posteriors_visiable = self.to_posteriors(z_visiable)
-            z_latents_visiable = posteriors_visiable.sample() if sampling else posteriors_visiable.mean
+            if self.encoder.last_layer_feature:
+                z_latents_visiable = ret["z_visible"]
+            else:
+                z_visiable = ret["z_visible"]
+                posteriors_visiable = self.to_posteriors(z_visiable)
+                z_latents_visiable = posteriors_visiable.sample() if sampling else posteriors_visiable.mean
         else:
             z_latents_visiable = None
 
