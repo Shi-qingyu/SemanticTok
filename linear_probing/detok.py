@@ -4,35 +4,42 @@ import logging
 import os
 import time
 import tqdm
+
+from einops import rearrange
 import torch
 from torch import nn
-
-from utils.builders import create_reconstruction_model
-from utils.builders import create_train_dataloader
 import torchvision.transforms as transforms
+
+from utils.builders import create_reconstruction_model, create_train_dataloader
 from utils.loader import ListDataset, center_crop_arr
+from utils.logger import MetricLogger, SmoothedValue
 import utils.distributed as dist
 import utils.misc as misc
-from utils.logger import MetricLogger, SmoothedValue
 
 logger = logging.getLogger("Linear Probing")
 
 
 class LinearProbing(nn.Module):
-    def __init__(self, model: nn.Module, num_classes: int):
+    def __init__(self, model: nn.Module, num_classes: int, last_layer_feature: bool = True):
         super().__init__()
         self.model = model
         self.num_classes = num_classes
+        self.last_layer_feature = last_layer_feature
 
-        in_channels = model.encoder.width
-        
-        # mean and variance
-        linear = nn.Linear(in_channels, num_classes * 2)
-        self.model.encoder.latent_head = linear
-
-        self.freeze_model()
+        if last_layer_feature:
+            in_channels = model.encoder.width
+            linear = nn.Linear(in_channels, num_classes)
+            self.model.encoder.latent_head = linear
+            self.freeze_model_without_head()
+        else:
+            in_channels = model.token_channels
+            self.model.requires_grad_(False)
+            linear = nn.Linear(in_channels, num_classes)
+            self.cls_head = linear
+            
+        self.model.eval()
     
-    def freeze_model(self):
+    def freeze_model_without_head(self):
         for name, param in self.model.named_parameters():
             if "encoder.latent_head" in name:
                 logger.info("Training latent head only")
@@ -41,7 +48,14 @@ class LinearProbing(nn.Module):
                 param.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = self.model.tokenize(x, sampling=False)  # [B, C, H, W]
+        if self.last_layer_feature:
+            z = self.model.encoder(x)["z"]
+            z = rearrange(z, "b (h w) c -> b c h w", h=self.model.seq_h)
+        else:
+            z = self.model.encode(x, sampling=False)["z_latents"]
+            z = self.cls_head(z)
+            z = rearrange(z, "b (h w) c -> b c h w", h=self.model.seq_h)
+
         logits = z.mean(dim=(-2, -1))
         return logits
 
@@ -160,7 +174,7 @@ def main(args: argparse.Namespace) -> int:
     ckpt = torch.load(args.checkpoint_path, map_location="cpu")
     msg = model.load_state_dict(ckpt["model"], strict=False)
     logger.info(f"Checkpoint loaded: {msg}")
-    linear_prob = LinearProbing(model, args.num_classes)
+    linear_prob = LinearProbing(model, args.num_classes, args.last_layer_feature)
     
     # Then create dataloaders
     data_loader_train = create_train_dataloader(args)
@@ -247,11 +261,12 @@ def main(args: argparse.Namespace) -> int:
                     f"Loss: {loss_reduced:.4f} Acc: {acc_reduced:.4f} "
                     f"LR: {optimizer.param_groups[0]['lr']:.6f}"
                 )
-            
+
         if epoch % args.eval_freq == 0:
             val_acc = evaluate(linear_prob, data_loader_val, device)
             if is_main_process:
                 logger.info(f"Epoch {epoch} - Validation accuracy: {val_acc:.4f}")
+    
     return 0
 
 
@@ -265,28 +280,23 @@ def get_args_parser():
     # model parameters
     parser.add_argument("--model", default="detok_BB", type=str)
     parser.add_argument("--token_channels", default=16, type=int)
+    parser.add_argument("--pretrained_model_name_or_path", default="", type=str)
     parser.add_argument("--img_size", default=256, type=int)
     parser.add_argument("--patch_size", default=16, type=int)
+    parser.add_argument("--last_layer_feature", action="store_true")
 
     parser.add_argument("--mask_ratio", default=0.0, type=float)
-    parser.add_argument("--random_mask_ratio", action="store_true")
     parser.add_argument("--gamma", default=0.0, type=float, help="noise standard deviation for training")
-    parser.add_argument("--use_additive_noise", action="store_true")
 
     parser.add_argument("--checkpoint_path", default=None, type=str)
 
     # logging parameters
     parser.add_argument("--output_dir", default="./work_dirs/linear_prob")
-    parser.add_argument("--print_freq", type=int, default=100)
+    parser.add_argument("--print_freq", type=int, default=50)
     parser.add_argument("--eval_freq", type=int, default=1)
 
 
     # evaluation parameters
-    parser.add_argument("--num_images", default=50000, type=int, help="Number of images to evaluate on")
-    parser.add_argument("--online_eval", action="store_true")
-    parser.add_argument("--fid_stats_path", type=str, default="data/fid_stats/val_fid_statistics_file.npz")
-    parser.add_argument("--keep_eval_folder", action="store_true")
-    parser.add_argument("--evaluate", action="store_true")
     parser.add_argument("--eval_bsz", type=int, default=256)
 
     # optimization parameters
