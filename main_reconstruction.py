@@ -46,6 +46,8 @@ def main(args: argparse.Namespace) -> int:
     model, ema_model = create_reconstruction_model(args)
     if args.train_decoder_only and hasattr(model, "freeze_everything_but_decoder"):
         model.freeze_everything_but_decoder()
+    if args.freeze_encoder and hasattr(model, "freeze_encoder"):
+        model.freeze_encoder()
 
     optimizer, loss_scaler = create_optimizer_and_scaler(args, model)
     loss_fn = create_loss_module(args)
@@ -148,7 +150,7 @@ def get_args_parser():
     parser.add_argument("--token_channels", default=16, type=int)
     parser.add_argument("--img_size", default=256, type=int)
     parser.add_argument("--patch_size", default=16, type=int)
-    parser.add_argument("--pretrained_model_name_or_path", default=None, type=str)
+    parser.add_argument("--pretrained_model_name_or_path", default="", type=str)
     parser.add_argument("--frozen_dinov3", action="store_true")
 
     parser.add_argument("--mask_ratio", default=0.0, type=float)
@@ -169,6 +171,7 @@ def get_args_parser():
 
     parser.add_argument("--no_load_ckpt", action="store_true")
     parser.add_argument("--train_decoder_only", action="store_true")
+    parser.add_argument("--freeze_encoder", action="store_true")
     parser.add_argument("--vis_only", action="store_true")
 
     # loss parameters
@@ -195,7 +198,7 @@ def get_args_parser():
     parser.add_argument("--resume_from", default=None, help="resume model weights and optimizer state")
     parser.add_argument("--load_from", type=str, default=None, help="load from pretrained model")
     parser.add_argument("--keep_n_ckpts", default=1, type=int, help="keep the last n checkpoints")
-    parser.add_argument("--milestone_interval", default=100, type=int, help="keep checkpoints every n epochs")
+    parser.add_argument("--milestone_interval", default=50, type=int, help="keep checkpoints every n epochs")
 
 
     # evaluation parameters

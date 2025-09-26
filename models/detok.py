@@ -251,13 +251,13 @@ class Encoder(nn.Module):
         if self.last_layer_feature:
             z_aux = x
         else:
-            z_aux = None    # use posterior(z) for auxiliary decoder
+            z_aux = None
 
         z = self.latent_head(x)    # [bsz, seq_len, token_channels]
     
         ret = dict(
             z=z,
-            z_aux=z_aux,
+            z_aux=z_aux if z_aux is not None else z,
             ids_restore=ids_restore,
             ids_keep=ids_keep,
             ids_masked=ids_masked,
@@ -1043,6 +1043,17 @@ class DeTok(nn.Module):
 
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
         logger.info(f"[DeTok] trainable params: {params_M:.2f}M (after freezing all but decoder)")
+        
+    def freeze_encoder(self) -> None:
+        """freeze all parameters except the latent head, used for latent head fine-tuning"""
+        for name, param in self.encoder.named_parameters():
+            if "latent_head" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        
+        params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
+        logger.info(f"[DeTok] trainable params: {params_M:.2f}M (after freezing encoder)")
 
     def reset_stats(self, mean: Tensor | np.ndarray | float, std: Tensor | np.ndarray | float) -> None:
         if isinstance(mean, float) and isinstance(std, float) or (mean.ndim == 0 and std.ndim == 0):
@@ -1089,7 +1100,9 @@ class DeTok(nn.Module):
                 posteriors_aux = self.to_posteriors(z_aux)
                 z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
         else:
-            z_latents_aux = ret["z_aux"] if ret["z_aux"] is not None else z_latents
+            z_latents_aux = ret["z_aux"]
+            posteriors_aux = self.to_posteriors(z_latents_aux)
+            z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
 
         if self.training and self.gamma > 0.0:
             device = z_latents.device
@@ -1104,6 +1117,11 @@ class DeTok(nn.Module):
                 z_latents = z_latents + noise_level_tensor * noise
             else:
                 z_latents = (1 - noise_level_tensor) * z_latents + noise_level_tensor * noise
+                
+            # if z_latents_aux is not None:
+            #     noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
+            #     noise_aux = torch.randn_like(z_latents_aux) * self.gamma
+            #     z_latents_aux = (1 - noise_level_tensor) * z_latents_aux + noise_level_tensor * noise_aux
 
         ret = dict(
             z_latents=z_latents,
@@ -1135,9 +1153,6 @@ class DeTok(nn.Module):
                 aux_foundation_model = self.aux_foundation_models[model_type]
                 transforms = self.aux_foundation_models_transforms[model_type]
                 aux_decoder = self.aux_decoders[model_type]
-
-                if self.use_adaptive_channels:
-                    z_latents_aux = z_latents_aux[:, :, :z_latents_aux.shape[-1] // 2]
 
                 if model_type == "dinov2":
                     x_dino = transforms(x_aux)
