@@ -139,7 +139,9 @@ def create_generation_model(args):
                 gamma=0.0,
                 mask_ratio=0.0,
                 pretrained_model_name_or_path=getattr(args, "pretrained_model_name_or_path", ""),
+                num_register_tokens=getattr(args, "num_register_tokens", 0),
                 use_skip_connection=getattr(args, "use_skip_connection", False),
+                aux_cls_token=getattr(args, "aux_cls_token", False),
             )
         elif args.tokenizer in models.DeAE_models:
             tokenizer: nn.Module = models.DeAE_models[args.tokenizer](
@@ -283,6 +285,7 @@ def create_reconstruction_model(args):
             mask_ratio_min=getattr(args, "mask_ratio_min", -0.1),
             pretrained_model_name_or_path=getattr(args, "pretrained_model_name_or_path", ""),
             frozen_dinov3=getattr(args, "frozen_dinov3", False),
+            num_register_tokens=getattr(args, "num_register_tokens", 0),
             mask_ratio_type=getattr(args, "mask_ratio_type", "random"),
             use_skip_connection=getattr(args, "use_skip_connection", False),
             vf_model_type=getattr(args, "vf_model_type", ""),
