@@ -278,8 +278,8 @@ def create_reconstruction_model(args):
             img_size=args.img_size,
             patch_size=args.patch_size,
             token_channels=args.token_channels,
-            mask_ratio=args.mask_ratio,
-            gamma=args.gamma,
+            mask_ratio=getattr(args, "mask_ratio", 0.7),
+            gamma=getattr(args, "gamma", 3.0),
             mask_ratio_min=getattr(args, "mask_ratio_min", -0.1),
             pretrained_model_name_or_path=getattr(args, "pretrained_model_name_or_path", ""),
             frozen_dinov3=getattr(args, "frozen_dinov3", False),
@@ -293,6 +293,7 @@ def create_reconstruction_model(args):
             use_adaptive_channels=getattr(args, "use_adaptive_channels", False),
             last_layer_feature=getattr(args, "last_layer_feature", False),
             vit_aux_model_size=getattr(args, "vit_aux_model_size", "tiny"),
+            aux_cls_token=getattr(args, "aux_cls_token", False),
         )
     elif args.model in models.DeAE_models:
         model = models.DeAE_models[args.model](
@@ -312,7 +313,7 @@ def create_reconstruction_model(args):
     logger.info(model)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"{args.model} Trainable Parameters: {n_params / 1e6:.2f}M ({n_params:,})")
-    ema = models.SimpleEMAModel(model, decay=args.ema_rate)
+    ema = models.SimpleEMAModel(model, decay=getattr(args, "ema_rate", 0.999))
     return model, ema
 
 

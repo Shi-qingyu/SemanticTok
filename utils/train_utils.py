@@ -1078,6 +1078,7 @@ def collect_tokenizer_stats(
                 channel_sum += moments.sum(dim=[0, 1])
                 channel_sum_sq += (moments ** 2).sum(dim=[0, 1])
                 channel_count += moments.size(0) * moments.size(1)
+                
         elif tokenizer_type == "ae":
             if chan_dim == 1:   # [B, C, H, W]
                 num_channels = moments.size(1)

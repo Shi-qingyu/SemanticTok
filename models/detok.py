@@ -45,19 +45,77 @@ def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
 
 
 def get_rope_tensor(
-    dim: int, seq_h: int, seq_w: int, max_freq: float = 7.0, min_freq: float = 7e-4
+    dim: int,
+    seq_h: int,
+    seq_w: int,
+    max_freq: float = 7.0,
+    min_freq: float = 7e-4,
+    add_cls: bool = False,
+    n_register: int = 0,
+    device=None,
+    dtype=None,
 ) -> Tensor:
-    """generate rotary position embedding tensor for 2D sequences."""
-    freqs_1d = max_freq * (max_freq / min_freq) ** torch.linspace(0, -1, dim // 4)
-    freqs_1d = torch.cat([freqs_1d, freqs_1d])
-    freqs_2d = torch.zeros(2, dim)
-    freqs_2d[0, : dim // 2] = freqs_1d
-    freqs_2d[1, -dim // 2 :] = freqs_1d
-    freqs_2d = freqs_2d * 2 * torch.pi
-    coord_x = torch.linspace(0, 1, seq_h)
-    coord_y = torch.linspace(0, 1, seq_w)
-    coords_all = torch.cartesian_prod(coord_x, coord_y)
-    angle = coords_all @ freqs_2d
+    """
+    Build a 2D Rotary Position Embedding (RoPE) table for an H W token grid,
+    optionally prepending a [CLS] token and N register tokens.
+
+    Layout (row order): [CLS] [register x n_register] [grid tokens (seq_h * seq_w)]
+    Output shape: (L, 2*dim), where L = (1 if add_cls else 0) + n_register + seq_h*seq_w
+
+    Design choice:
+    - CLS and register tokens receive identity rotation (angle=0 → cos=1, sin=0).
+      This keeps them "position-agnostic" while grid tokens carry spatial phase.
+
+    Args:
+        dim: Head dimension used by RoPE. Must be divisible by 4 for 2D splitting.
+        seq_h: Grid height (number of tokens along H).
+        seq_w: Grid width (number of tokens along W).
+        max_freq, min_freq: Frequency band range for RoPE.
+        add_cls: If True, prepend one CLS row with identity rotation.
+        n_register: Number of register rows to prepend after CLS, identity rotation.
+        device, dtype: Torch device/dtype for created tensors.
+
+    Returns:
+        rope_table: Tensor of shape (L, 2*dim), concatenated [cos, sin] along last dim.
+    """
+    # Each axis (H and W) consumes dim//2 features; each needs even pairing → dim % 4 == 0.
+    assert dim % 4 == 0, "dim must be a multiple of 4 for 2D RoPE."
+
+    device = device if device is not None else torch.device("cpu")
+    dtype = dtype if dtype is not None else torch.get_default_dtype()
+
+    # Build 1D frequencies for half the channels (dim//2), mirrored to form even/odd pairs.
+    # We create a geometric progression from max_freq down to min_freq.
+    freqs_1d = max_freq * (max_freq / min_freq) ** torch.linspace(
+        0, -1, dim // 4, device=device, dtype=dtype
+    )  # length = dim//4
+    freqs_1d = torch.cat([freqs_1d, freqs_1d])  # length = dim//2 (paired)
+
+    # Place H-axis freqs in the first half, W-axis freqs in the second half of channels.
+    freqs_2d = torch.zeros(2, dim, device=device, dtype=dtype)  # shape (2, dim)
+    freqs_2d[0, : dim // 2] = freqs_1d             # H axis
+    freqs_2d[1, -dim // 2 :] = freqs_1d            # W axis
+    freqs_2d = freqs_2d * 2 * torch.pi             # angular frequencies
+
+    # Build normalized coordinates in [0, 1] for H and W, then the full grid (N = H*W).
+    coord_x = torch.linspace(0, 1, seq_h, device=device, dtype=dtype)
+    coord_y = torch.linspace(0, 1, seq_w, device=device, dtype=dtype)
+    coords_all = torch.cartesian_prod(coord_x, coord_y)  # (N, 2) with columns [x, y]
+
+    # Compute per-token angles by multiplying coords with axis frequencies.
+    # angle_grid: (N, dim), each column corresponds to one channel's angle.
+    angle_grid = coords_all @ freqs_2d
+
+    # Special tokens (CLS + registers) should not be rotated → zero angles.
+    num_special = (1 if add_cls else 0) + int(n_register)
+    if num_special > 0:
+        angle_special = torch.zeros(num_special, dim, device=device, dtype=dtype)
+        angle = torch.cat([angle_special, angle_grid], dim=0)  # (num_special+N, dim)
+    else:
+        angle = angle_grid
+
+    # Return concatenated cos/sin for downstream rotary application on Q/K.
+    # Final shape: (L, 2*dim)
     rope_tensor = torch.cat([angle.cos(), angle.sin()], dim=-1)
     return rope_tensor
 
@@ -142,6 +200,7 @@ class Encoder(nn.Module):
         random_mask_ratio: bool = True,
         use_skip_connection: bool = False,
         last_layer_feature: bool = False,
+        aux_cls_token: bool = False,
     ) -> None:
         super().__init__()
         self.img_size = img_size
@@ -156,6 +215,7 @@ class Encoder(nn.Module):
         self.seq_len = self.grid_size ** 2
         self.use_skip_connection = use_skip_connection
         self.last_layer_feature = last_layer_feature
+        self.aux_cls_token = aux_cls_token
         
         size_dict = SIZE_DICT[self.model_size]
         num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
@@ -167,9 +227,15 @@ class Encoder(nn.Module):
             Rearrange("b c h w -> b (h w) c", h=self.grid_size, w=self.grid_size),
         )
 
+        if self.aux_cls_token:
+            self.aux_cls_token_embedding = nn.Parameter(torch.randn(1, 1, width))
+
         # learnable embeddings
         scale = width ** -0.5
-        self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
+        if self.aux_cls_token:
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len + 1, width))
+        else:
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
 
         # transformer layers
         norm_layer = partial(nn.RMSNorm, eps=1e-6)
@@ -182,7 +248,7 @@ class Encoder(nn.Module):
 
         # rotary position embedding
         head_dim = self.transformer[0].attn.head_dim
-        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size).unsqueeze(0)
+        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size, add_cls=self.aux_cls_token).unsqueeze(0)
         self.register_buffer("rope_tensor", rope_tensor, persistent=False)
 
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
@@ -239,7 +305,12 @@ class Encoder(nn.Module):
             x_skip = x_skip.unflatten(-1, (self.width, num_chunks)).mean(dim=-1)
             x = self.patch_embed(x) + self.positional_embedding + x_skip
         else:
-            x = self.patch_embed(x) + self.positional_embedding
+            x = self.patch_embed(x)
+        
+        if self.aux_cls_token:
+            x = torch.cat([self.aux_cls_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
+
+        x = x + self.positional_embedding
             
         x, _, ids_restore, rope, ids_keep, ids_masked = self.mae_random_masking(x)
 
@@ -600,6 +671,7 @@ class Decoder(nn.Module):
         patch_size: int = 16,
         model_size: str = "base",
         token_channels: int = 16,
+        aux_cls_token: bool = False,
     ) -> None:
         super().__init__()
         self.img_size = img_size
@@ -607,14 +679,20 @@ class Decoder(nn.Module):
         self.grid_size = self.img_size // self.patch_size
         self.model_size = model_size
         self.token_channels = token_channels
-        self.seq_len = self.grid_size**2
-
+        self.seq_len = self.grid_size ** 2
+        # self.aux_cls_token = aux_cls_token
+        
         params = SIZE_DICT[self.model_size]
         num_layers, num_heads, width = params["layers"], params["heads"], params["width"]
 
         # learnable embeddings
-        scale = width**-0.5
+        scale = width ** -0.5
+        # if aux_cls_token:
+        #     self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len + 1, width))
+        # else:
+        #     self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
         self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
+        
         self.mask_token = nn.Parameter(scale * torch.randn(1, 1, width))
 
         # decoder layers
@@ -683,6 +761,7 @@ class TransformerDecoder(nn.Module):
         model_size: str = "base", 
         token_channels: int = 16,
         aux_embed_dim: int = 1024,
+        aux_cls_token: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -698,10 +777,14 @@ class TransformerDecoder(nn.Module):
         
         self.token_channels = token_channels
         self.aux_embed_dim = aux_embed_dim
+        self.aux_cls_token = aux_cls_token
         
         # learnable embeddings
         scale = width ** -0.5
-        self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
+        if aux_cls_token:
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len + 1, width))
+        else:
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
         
         # token embedding
         self.token_embedding = nn.Linear(self.token_channels, width)
@@ -722,7 +805,7 @@ class TransformerDecoder(nn.Module):
 
         # rotary position embedding
         head_dim = self.transformer[0].attn.head_dim
-        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size).unsqueeze(0)
+        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size, add_cls=aux_cls_token).unsqueeze(0)
         self.register_buffer("rope_tensor", rope_tensor, persistent=False)
 
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
@@ -809,6 +892,7 @@ class DeTok(nn.Module):
         last_layer_feature: bool = False,
         vf_model_type: str = "",
         aux_model_type: str = "",
+        aux_cls_token: bool = False,
         aux_dec_type: str = "transformer",
         aux_input_type: str = "noisy",
         aux_target: str = "reconstruction",
@@ -866,12 +950,14 @@ class DeTok(nn.Module):
                 random_mask_ratio=mask_ratio_type.lower() == "random",
                 use_skip_connection=use_skip_connection,
                 last_layer_feature=last_layer_feature,
+                aux_cls_token=aux_cls_token,
             )
         self.decoder = Decoder(
             img_size=img_size,
             patch_size=patch_size,
             model_size=vit_dec_model_size,
             token_channels=token_channels,
+            aux_cls_token=aux_cls_token,
         )
 
         # model configuration
@@ -887,6 +973,7 @@ class DeTok(nn.Module):
         self.use_adaptive_channels = use_adaptive_channels
         self.aux_input_type = aux_input_type
         self.aux_target = aux_target
+        self.aux_cls_token = aux_cls_token
         
         # initialize weights
         self.apply(self._init_weights)
@@ -934,6 +1021,7 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.num_features,
+                    aux_cls_token=aux_cls_token,
                 )
 
             if "dinov3" in aux_model_type:
@@ -1081,6 +1169,10 @@ class DeTok(nn.Module):
     def encode_into_posteriors(self, x: Tensor):
         """encode image into posterior distributions."""
         z = self.encoder(x)["z"]
+        
+        if self.aux_cls_token:
+            z = z[:, 1:]
+        
         return self.to_posteriors(z)
 
     def encode(self, x: Tensor, sampling: bool = False, noise_level: float = -1.0):
@@ -1103,8 +1195,9 @@ class DeTok(nn.Module):
                 z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
         else:
             z_latents_aux = ret["z_aux"]
-            posteriors_aux = self.to_posteriors(z_latents_aux)
-            z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
+            if not self.encoder.last_layer_feature:
+                posteriors_aux = self.to_posteriors(z_latents_aux)
+                z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
 
         if self.training and self.gamma > 0.0:
             device = z_latents.device
@@ -1124,6 +1217,9 @@ class DeTok(nn.Module):
                 noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
                 noise_aux = torch.randn_like(z_latents_aux) * self.gamma
                 z_latents_aux = (1 - noise_level_tensor) * z_latents_aux + noise_level_tensor * noise_aux
+
+        if self.aux_cls_token:
+            z_latents = z_latents[:, 1:]
 
         ret = dict(
             z_latents=z_latents,
@@ -1161,7 +1257,10 @@ class DeTok(nn.Module):
                     x_dino = F.interpolate(x_dino, size=(224, 224), mode='bilinear', align_corners=False)
                     x_dino = x_dino.to(dtype=x.dtype)
                     with torch.inference_mode():
-                        aux_feature = aux_foundation_model.forward_features(x_dino)[:, 1:]   # [B, 256, dim]
+                        if self.encoder.aux_cls_token:
+                            aux_feature = aux_foundation_model.forward_features(x_dino)   # [B, 257, dim]
+                        else:
+                            aux_feature = aux_foundation_model.forward_features(x_dino)[:, 1:]   # [B, 256, dim]
 
                 elif model_type == "dinov3":
                     x_dinov3 = (x_aux * 255).to(torch.uint8)
@@ -1238,7 +1337,7 @@ class DeTok(nn.Module):
         else:
             aux_features = None
             pred_aux_features = None
-        
+
         if isinstance(self.encoder, DualEncoder):
             decoded = self.decoder(z_latents[:z_latents.shape[0] // 4], ids_restore=None)
         else:
