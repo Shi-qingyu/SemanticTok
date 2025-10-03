@@ -1,7 +1,7 @@
 #!/bin/bash
 
 tokenizer_project=tokenizer_training
-tokenizer_exp_name=detokBB-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoisyaligncls
+tokenizer_exp_name=detokBB-reg0-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoisyaligndiffcls
 num_register_tokens=0
 
 force_one_d_seq=257
@@ -30,10 +30,9 @@ torchrun \
     --batch_size $batch_size --epochs $epochs --use_aligned_schedule \
     --pretrained_model_name_or_path "" \
     --num_register_tokens $num_register_tokens --aux_cls_token --diff_cls_token \
-    --tokenizer detok_BB --use_ema_tokenizer --overwrite_stats \
+    --tokenizer detok_BB --use_ema_tokenizer --collect_tokenizer_stats --overwrite_stats \
     --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl \
-    --evaluate \
-    --load_tokenizer_from debug.pth \
+    --load_tokenizer_from work_dirs/$tokenizer_project/$tokenizer_exp_name/checkpoints/latest.pth \
     --model SiT_base \
     --force_one_d_seq $force_one_d_seq \
     --num_sampling_steps 250 --cfg 1.3 \
