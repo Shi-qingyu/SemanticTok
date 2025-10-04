@@ -996,7 +996,7 @@ class DeTok(nn.Module):
             model_size=vit_dec_model_size,
             token_channels=token_channels,
             diff_cls_token=diff_cls_token,
-            num_register_tokens=num_register_tokens,
+            num_register_tokens=0,
         )
 
         # model configuration
@@ -1256,9 +1256,6 @@ class DeTok(nn.Module):
                 noise_aux = torch.randn_like(z_latents_aux) * self.gamma
                 z_latents_aux = (1 - noise_level_tensor) * z_latents_aux + noise_level_tensor * noise_aux
 
-        if self.aux_cls_token and not self.diff_cls_token:
-            z_latents = z_latents[:, 1:]
-
         ret = dict(
             z_latents=z_latents,
             z_latents_aux=z_latents_aux,
@@ -1279,6 +1276,9 @@ class DeTok(nn.Module):
         ids_restore = ret["ids_restore"]
         ids_keep = ret["ids_keep"]
         ids_masked = ret["ids_masked"]
+        
+        if self.aux_cls_token and not self.diff_cls_token:
+            z_latents = z_latents[:, 1:]
 
         if self.use_aux and self.training:
             x_aux = (x + 1) * 0.5
@@ -1396,7 +1396,12 @@ class DeTok(nn.Module):
         """tokenize input image and normalize the latent tokens."""
         ret = self.encode(x, sampling=sampling)
         z = ret["z_latents"]
+        
+        if self.aux_cls_token and not self.diff_cls_token:
+            z = z[:, 1:]
+            
         z = self.normalize_z(z)
+        
         if self.diff_cls_token:
             return z
         else:
