@@ -15,6 +15,12 @@ Download ImageNet1K through:
 bash prepare_data.sh
 ```
 
+### DINOv3
+```bash
+hf download QingyuShi/SemanticTok offline_models.zip --local-dir ./
+unzip offline_models.zip
+```
+
 ### Data Organization
 
 Your data directory should be organized as follows:
