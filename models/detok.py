@@ -1104,6 +1104,7 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.config.hidden_size,
+                    aux_cls_token=aux_cls_token,
                 )
             
             if "sam" in aux_model_type:
@@ -1337,7 +1338,11 @@ class DeTok(nn.Module):
                     )
                     with torch.inference_mode():
                         aux_feature = aux_foundation_model(**inputs).last_hidden_state
-                    aux_feature = aux_feature[:, 1 + aux_foundation_model.config.num_register_tokens:, :]
+                    
+                    if self.encoder.aux_cls_token:
+                        aux_feature = torch.cat([aux_feature[:, 0, :].unsqueeze(1), aux_feature[:, 1 + aux_foundation_model.config.num_register_tokens:, :]], dim=1)
+                    else:
+                        aux_feature = aux_feature[:, 1 + aux_foundation_model.config.num_register_tokens:, :]
 
                 elif model_type == "sam":
                     x_sam = transforms(
