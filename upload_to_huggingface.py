@@ -89,7 +89,7 @@ def main():
     """
     # Configuration
     base_dir = "work_dirs/tokenizer_training"
-    repo_id = "QIngyuShi/SemanticTok"
+    repo_id = "QingyuShi/SemanticTok"
     token = "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"  # Set to your HF token if needed, or use HF CLI login
     
     # Create temporary directory for zip files
