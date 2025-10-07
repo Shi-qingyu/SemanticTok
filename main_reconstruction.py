@@ -172,6 +172,7 @@ def get_args_parser():
     parser.add_argument("--aux_input_type", default="noisy", type=str, choices=["noisy", "clean"])
     parser.add_argument("--aux_target", default="reconstruction", type=str, choices=["reconstruction", "align"])
     parser.add_argument("--aux_cls_token", action="store_true")
+    parser.add_argument("--pooling_cls_token", action="store_true")
 
     parser.add_argument("--no_load_ckpt", action="store_true")
     parser.add_argument("--train_decoder_only", action="store_true")

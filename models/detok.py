@@ -201,6 +201,7 @@ class Encoder(nn.Module):
         use_skip_connection: bool = False,
         last_layer_feature: bool = False,
         aux_cls_token: bool = False,
+        pooling_cls_token: bool = False,
         diff_cls_token: bool = False,
         num_register_tokens: int = 0,
     ) -> None:
@@ -218,8 +219,10 @@ class Encoder(nn.Module):
         self.use_skip_connection = use_skip_connection
         self.last_layer_feature = last_layer_feature
         self.aux_cls_token = aux_cls_token
+        self.pooling_cls_token = pooling_cls_token
         self.diff_cls_token = diff_cls_token
         self.num_register_tokens = num_register_tokens
+
         size_dict = SIZE_DICT[self.model_size]
         num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
         self.width = width
@@ -232,12 +235,12 @@ class Encoder(nn.Module):
 
         # learnable embeddings
         scale = width ** -0.5
-        if self.aux_cls_token:
+        if self.aux_cls_token and not self.pooling_cls_token:
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + 1 + self.seq_len, width))
         else:
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + self.seq_len, width))
 
-        if self.aux_cls_token:
+        if self.aux_cls_token and not self.pooling_cls_token:
             self.aux_cls_token_embedding = nn.Parameter(scale * torch.randn(1, 1, width))
             
         if self.num_register_tokens > 0:
@@ -254,7 +257,7 @@ class Encoder(nn.Module):
 
         # rotary position embedding
         head_dim = self.transformer[0].attn.head_dim
-        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size, add_cls=self.aux_cls_token, n_register=self.num_register_tokens).unsqueeze(0)
+        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size, add_cls=self.aux_cls_token and not self.pooling_cls_token, n_register=self.num_register_tokens).unsqueeze(0)
         self.register_buffer("rope_tensor", rope_tensor, persistent=False)
 
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
@@ -303,7 +306,7 @@ class Encoder(nn.Module):
     def show_attention_map_last_layer(self, x: Tensor):
         """show attention map of last layer."""
         x = self.patch_embed(x)
-        if self.aux_cls_token:
+        if self.aux_cls_token and not self.pooling_cls_token:
             x = torch.cat([self.aux_cls_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
         if self.num_register_tokens > 0:
             x = torch.cat([self.register_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
@@ -338,7 +341,7 @@ class Encoder(nn.Module):
         else:
             x = self.patch_embed(x)
         
-        if self.aux_cls_token:
+        if self.aux_cls_token == "learnable":
             x = torch.cat([self.aux_cls_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
         if self.num_register_tokens > 0:
             x = torch.cat([self.register_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
@@ -364,11 +367,23 @@ class Encoder(nn.Module):
             z = z[:, self.num_register_tokens:]
             z_aux = z_aux[:, self.num_register_tokens:]
 
-        if self.aux_cls_token and not self.diff_cls_token:
-            z = z[:, 1:]
-    
+        if self.aux_cls_token:
+            if self.pooling_cls_token:
+                z_cls = z.mean(1).unsqueeze(1)
+                z = z
+                z_aux_cls = z_aux.mean(1).unsqueeze(1)
+                z_aux = torch.cat([z_aux_cls, z_aux], dim=1)
+            else:
+                z_cls = z[:, 0].unsqueeze(1)
+                z = z[:, 1:]
+                z_aux_cls = z_aux[:, 0].unsqueeze(1)
+                z_aux = z_aux
+        
+        if self.diff_cls_token:
+            z = torch.cat([z_cls, z], dim=1)
+
         ret = dict(
-            z=z,
+            z=z,    # [bsz, seq_len + 1, dim] if diff_cls_token, [bsz, seq_len, dim] otherwise
             z_aux=z_aux,
             ids_restore=ids_restore,
             ids_keep=ids_keep,
@@ -712,7 +727,6 @@ class Decoder(nn.Module):
         patch_size: int = 16,
         model_size: str = "base",
         token_channels: int = 16,
-        aux_cls_token: bool = False,
         diff_cls_token: bool = False,
         num_register_tokens: int = 0,
     ) -> None:
@@ -724,7 +738,6 @@ class Decoder(nn.Module):
         self.token_channels = token_channels
         self.seq_len = self.grid_size ** 2
         self.num_register_tokens = num_register_tokens
-        self.aux_cls_token = aux_cls_token
         self.diff_cls_token = diff_cls_token
         
         params = SIZE_DICT[self.model_size]
@@ -843,7 +856,7 @@ class TransformerDecoder(nn.Module):
         
         # learnable embeddings
         scale = width ** -0.5
-        if aux_cls_token:
+        if self.aux_cls_token:
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len + 1, width))
         else:
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
@@ -874,7 +887,7 @@ class TransformerDecoder(nn.Module):
         logger.info(f"[DeTok-AuxiliaryDecoder] params: {params_M:.2f}M, {model_size}-{num_layers}-{width}")
     
     def forward(self, z_latents: Tensor, ids_restore: Tensor | None = None):
-        """forward pass through auxiliary decoder."""
+        """forward pass through auxiliary decoder."""            
         z = self.token_embedding(z_latents)
         bsz, seq_len, _ = z.shape
 
@@ -956,6 +969,7 @@ class DeTok(nn.Module):
         vf_model_type: str = "",
         aux_model_type: str = "",
         aux_cls_token: bool = False,
+        pooling_cls_token: bool = False,
         diff_cls_token: bool = False,
         aux_dec_type: str = "transformer",
         aux_input_type: str = "noisy",
@@ -1016,6 +1030,7 @@ class DeTok(nn.Module):
                 use_skip_connection=use_skip_connection,
                 last_layer_feature=last_layer_feature,
                 aux_cls_token=aux_cls_token,
+                pooling_cls_token=pooling_cls_token,
                 diff_cls_token=diff_cls_token,
                 num_register_tokens=num_register_tokens,
             )
@@ -1024,7 +1039,6 @@ class DeTok(nn.Module):
             patch_size=patch_size,
             model_size=vit_dec_model_size,
             token_channels=token_channels,
-            aux_cls_token=aux_cls_token,
             diff_cls_token=diff_cls_token,
             num_register_tokens=0,
         )
@@ -1043,6 +1057,7 @@ class DeTok(nn.Module):
         self.aux_input_type = aux_input_type
         self.aux_target = aux_target
         self.aux_cls_token = aux_cls_token
+        self.pooling_cls_token = pooling_cls_token
         self.diff_cls_token = diff_cls_token
         
         # initialize weights
@@ -1090,6 +1105,7 @@ class DeTok(nn.Module):
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.num_features,
                     aux_cls_token=aux_cls_token,
+                    pooling_cls_token=pooling_cls_token,
                 )
 
             if "dinov3" in aux_model_type:
@@ -1106,6 +1122,7 @@ class DeTok(nn.Module):
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.config.hidden_size,
                     aux_cls_token=aux_cls_token,
+                    pooling_cls_token=pooling_cls_token,
                 )
             
             if "sam" in aux_model_type:
@@ -1121,6 +1138,8 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.vision_encoder.config.output_channels,
+                    aux_cls_token=aux_cls_token,
+                    pooling_cls_token=pooling_cls_token,
                 )
             
             if "radio" in aux_model_type:
@@ -1136,6 +1155,8 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=1024,
+                    aux_cls_token=aux_cls_token,
+                    pooling_cls_token=pooling_cls_token,
                 )
             
             if "siglip" in aux_model_type:
@@ -1151,6 +1172,8 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.num_features,
+                    aux_cls_token=aux_cls_token,
+                    pooling_cls_token=pooling_cls_token,
                 )
 
             if "pixel" in aux_model_type:
@@ -1160,6 +1183,8 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=3,
+                    aux_cls_token=aux_cls_token,
+                    pooling_cls_token=pooling_cls_token,
                 )
 
         # setup to-posteriors function
@@ -1238,10 +1263,6 @@ class DeTok(nn.Module):
     def encode_into_posteriors(self, x: Tensor):
         """encode image into posterior distributions."""
         z = self.encoder(x)["z"]
-        
-        if self.aux_cls_token and not self.diff_cls_token:
-            z = z[:, 1:]
-        
         return self.to_posteriors(z)
 
     def encode(self, x: Tensor, sampling: bool = False, noise_level: float = -1.0):

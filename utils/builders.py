@@ -300,6 +300,7 @@ def create_reconstruction_model(args):
             last_layer_feature=getattr(args, "last_layer_feature", False),
             vit_aux_model_size=getattr(args, "vit_aux_model_size", "tiny"),
             aux_cls_token=getattr(args, "aux_cls_token", False),
+            pooling_cls_token=getattr(args, "pooling_cls_token", False),
         )
     elif args.model in models.DeAE_models:
         model = models.DeAE_models[args.model](
