@@ -236,9 +236,9 @@ class Encoder(nn.Module):
         # learnable embeddings
         scale = width ** -0.5
         if self.aux_cls_token and not self.pooling_cls_token:
-            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + 1 + self.seq_len, width))
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + 1 + 256, width))
         else:
-            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + self.seq_len, width))
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + 256, width))
 
         if self.aux_cls_token and not self.pooling_cls_token:
             self.aux_cls_token_embedding = nn.Parameter(scale * torch.randn(1, 1, width))
@@ -341,12 +341,19 @@ class Encoder(nn.Module):
         else:
             x = self.patch_embed(x)
         
-        if self.aux_cls_token == "learnable":
+        if self.aux_cls_token:
             x = torch.cat([self.aux_cls_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
         if self.num_register_tokens > 0:
             x = torch.cat([self.register_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
 
-        x = x + self.positional_embedding
+        if x.shape[1] != self.positional_embedding.shape[1]:
+            # [1, seq_len, width] -> [1, x.shape[1], width]
+            pos = self.positional_embedding.permute(0, 2, 1)
+            position_embedding = F.interpolate(pos, size=x.shape[1], mode="linear")
+            position_embedding = position_embedding.permute(0, 2, 1)
+        else:
+            position_embedding = self.positional_embedding
+        x = x + position_embedding
             
         x, _, ids_restore, rope, ids_keep, ids_masked = self.mae_random_masking(x)
 
@@ -746,10 +753,10 @@ class Decoder(nn.Module):
         # learnable embeddings
         scale = width ** -0.5
         if self.num_register_tokens > 0:
-            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + self.seq_len, width))
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + 256, width))
             self.register_token_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens, width))
         else:
-            self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
+            self.positional_embedding = nn.Parameter(scale * torch.randn(1, 256, width))
         
         self.mask_token = nn.Parameter(scale * torch.randn(1, 1, width))
 
@@ -804,7 +811,13 @@ class Decoder(nn.Module):
         if self.num_register_tokens > 0:
             z = torch.cat([self.register_token_embedding.expand(z.shape[0], -1, -1), z], dim=1)
             
-        z = z + self.positional_embedding
+        if z.shape[1] != self.positional_embedding.shape[1]:
+            pos = self.positional_embedding.permute(0, 2, 1)
+            position_embedding = F.interpolate(pos, size=z.shape[1], mode="linear")
+            position_embedding = position_embedding.permute(0, 2, 1)
+        else:
+            position_embedding = self.positional_embedding
+        z = z + position_embedding
 
         z = self.ln_pre(z)
         rope = self.rope_tensor.expand(bsz, -1, -1)
