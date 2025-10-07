@@ -696,29 +696,29 @@ def evaluate_generator(
     # ensure evaluation is done before cleanup
     torch.distributed.barrier()
 
-    # distributed cleanup
-    if not args.keep_eval_folder:
-        start_time = time.perf_counter()
-        # each GPU removes only its own files
-        subset_files = [f"{eval_dir}/{index:06d}.png" for index in range(start_idx, end_idx)]
-        for file_path in subset_files:
-            try:
-                os.remove(file_path)
-            except FileNotFoundError:
-                pass
+    # # distributed cleanup
+    # if not args.keep_eval_folder:
+    #     start_time = time.perf_counter()
+    #     # each GPU removes only its own files
+    #     subset_files = [f"{eval_dir}/{index:06d}.png" for index in range(start_idx, end_idx)]
+    #     for file_path in subset_files:
+    #         try:
+    #             os.remove(file_path)
+    #         except FileNotFoundError:
+    #             pass
 
-        # ensure all processes wait here before proceeding
-        torch.distributed.barrier()
+    #     # ensure all processes wait here before proceeding
+    #     torch.distributed.barrier()
 
-        # rank 0 removes the directories if they are empty
-        if rank == 0:
-            if not os.listdir(eval_dir):
-                os.rmdir(eval_dir)
-            logger.info(f"Removed evaluation folder: {eval_dir}")
-        logger.info(f"Cleanup time: {time.perf_counter() - start_time:.2f}s")
+    #     # rank 0 removes the directories if they are empty
+    #     if rank == 0:
+    #         if not os.listdir(eval_dir):
+    #             os.rmdir(eval_dir)
+    #         logger.info(f"Removed evaluation folder: {eval_dir}")
+    #     logger.info(f"Cleanup time: {time.perf_counter() - start_time:.2f}s")
 
-    # ensure all processes wait here before proceeding
-    torch.distributed.barrier()
+    # # ensure all processes wait here before proceeding
+    # torch.distributed.barrier()
     torch.cuda.empty_cache()
     time_str = str(datetime.timedelta(seconds=time.perf_counter() - eval_start_time))
     logger.info(f"Total evaluation time (gen+save+cleanup): {time_str}")
@@ -880,7 +880,7 @@ def evaluate_tokenizer(
         fid = metrics_dict["frechet_inception_distance"]
         inception_score = metrics_dict["inception_score_mean"]
         if wandb_logger is not None:
-            log_dict = {
+            log_dict = {"""  """
                 f"eval/rFID_ema={use_ema}-nimgs={num_imgs}": fid,
                 f"eval/rPSNR_ema={use_ema}-nimgs={num_imgs}": mean_psnr,
                 f"eval/Img_per_sec_per_gpu_ema={use_ema}-nimgs={num_imgs}": img_per_gpu_per_sec,
@@ -903,7 +903,6 @@ def evaluate_tokenizer(
     #             os.remove(file_path)
     #         except FileNotFoundError:
     #             pass
-
     #     # Ensure all processes wait here before proceeding
     #     torch.distributed.barrier()
 
@@ -914,7 +913,7 @@ def evaluate_tokenizer(
     #         logger.info("Removed evaluation folders.")
     #     logger.info(f"Cleanup time: {time.perf_counter() - start_time:.2f}s")
 
-    torch.distributed.barrier()
+    # torch.distributed.barrier()
     torch.cuda.empty_cache()
 
     time_str = str(datetime.timedelta(seconds=time.perf_counter() - eval_start_time))
