@@ -1,5 +1,11 @@
 ## Preparation
 
+### Upload
+
+Compress only .pth, .txt, and .json files in a folder into a zip file and then uploading.
+```bash
+python upload_to_huggingface.py --base_dir work_dirs/tokenizer_training
+```
 
 ### Installation
 
@@ -132,3 +138,5 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
     --vis_freq 50 --eval_bsz 256 \
     --data_path ./data/imagenet/train
 ```
+
+

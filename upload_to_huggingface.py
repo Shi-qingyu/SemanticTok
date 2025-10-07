@@ -10,26 +10,29 @@ from pathlib import Path
 from huggingface_hub import HfApi, list_repo_files
 from tqdm import tqdm
 
+import argparse
 
 def compress_folder(folder_path, output_zip_path):
     """
-    Compress a folder into a zip file.
-    
+    Compress only .pth, .txt, and .json files in a folder into a zip file.
+
     Args:
         folder_path: Path to the folder to compress
         output_zip_path: Path where the zip file will be created
     """
-    print(f"Compressing {folder_path} to {output_zip_path}...")
-    
+    print(f"Compressing {folder_path} to {output_zip_path} (only .pth, .txt, .json files)...")
+
     with zipfile.ZipFile(output_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         folder_path = Path(folder_path)
-        
-        # Walk through the directory
+
+        # Only include .pth, .txt, and .json files
         for file_path in folder_path.rglob('*'):
-            if file_path.is_file():
-                # Calculate the relative path for the file in the zip
+            if file_path.is_file() and file_path.suffix in {'.pth', '.txt', '.json'}:
+                # Use relative path inside the zip file
                 arcname = file_path.relative_to(folder_path.parent)
                 zipf.write(file_path, arcname)
+
+    print(f"Successfully compressed to {output_zip_path}")
     
     print(f"Successfully compressed to {output_zip_path}")
 
@@ -150,4 +153,12 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base_dir", type=str, default="work_dirs/tokenizer_training")
+    parser.add_argument("--repo_id", type=str, default="QingyuShi/SemanticTok")
+    parser.add_argument("--token", type=str, default="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")
+    args = parser.parse_args()
+    base_dir = args.base_dir
+    repo_id = args.repo_id
+    token = args.token
     main()
