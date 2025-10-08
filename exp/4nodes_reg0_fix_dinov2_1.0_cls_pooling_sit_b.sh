@@ -13,7 +13,7 @@ tokenizer_exp_name=detokBB-reg0-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoi
 num_register_tokens=0
 
 force_one_d_seq=0
-exp_name=sit_b-${tokenizer_exp_name}-2025-10-08
+exp_name=sit_b-${tokenizer_exp_name}-4nodes-2025-10-08
 
 project=gen_model_training
 batch_size=32  # nnodes * ngpus * batch_size = 1024
