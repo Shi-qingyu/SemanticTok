@@ -341,7 +341,7 @@ class Encoder(nn.Module):
         else:
             x = self.patch_embed(x)
         
-        if self.aux_cls_token:
+        if self.aux_cls_token and not self.pooling_cls_token:
             x = torch.cat([self.aux_cls_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
         if self.num_register_tokens > 0:
             x = torch.cat([self.register_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
