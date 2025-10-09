@@ -275,8 +275,16 @@ def create_reconstruction_model(args):
     logger.info("Creating reconstruction models.")
     if args.model in models.VAE_models:
         model = models.VAE_models[args.model](
-            load_ckpt=not getattr(args, "no_load_ckpt", False),
+            resolution=args.img_size,
+            embed_dim=args.token_channels,
             gamma=args.gamma,
+            aux_model_type=getattr(args, "aux_model_type", ""),
+            aux_dec_type=getattr(args, "aux_dec_type", "transformer"),
+            aux_model_size=getattr(args, "aux_model_size", "tiny"),
+            aux_input_type=getattr(args, "aux_input_type", "noisy"),
+            aux_cls_token=getattr(args, "aux_cls_token", False),
+            diff_cls_token=getattr(args, "diff_cls_token", False),
+            ckpt=getattr(args, "ckpt", None),
         )
     elif args.model in models.DeTok_models:
         model = models.DeTok_models[args.model](

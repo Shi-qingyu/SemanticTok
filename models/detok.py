@@ -15,7 +15,7 @@ from torch import Tensor
 
 from models.model_utils import SIZE_DICT
 
-from .autoencoder import DiagonalGaussianDistribution
+from models.gaussian import DiagonalGaussianDistribution
 from utils.foundation_models import create_foundation_model
 
 from transformers import AutoImageProcessor, AutoModel

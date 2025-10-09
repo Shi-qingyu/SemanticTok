@@ -7,8 +7,14 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 from diffusers.models import AutoencoderKL as DiffusersAutoencoderKLBackbone
 from einops import rearrange
+
+from models.detok import TransformerDecoder, MLPDecoder
+from models.gaussian import DiagonalGaussianDistribution
+from utils.foundation_models import create_foundation_model
 
 from utils.loader import CONSTANTS
 
@@ -252,8 +258,8 @@ class Encoder(nn.Module):
         h = nonlinearity(h)
         h = self.conv_out(h)
         return h
-
-
+    
+    
 class Decoder(nn.Module):
     def __init__(
         self,
@@ -280,7 +286,6 @@ class Decoder(nn.Module):
         self.in_channels = in_channels
         self.give_pre_end = give_pre_end
         self.grad_checkpointing = grad_checkpointing
-
         # compute in_ch_mult, block_in and curr_res at lowest res
         block_in = ch * ch_mult[self.num_resolutions - 1]
         curr_res = resolution // 2 ** (self.num_resolutions - 1)
@@ -369,63 +374,12 @@ class Decoder(nn.Module):
         return h
 
 
-class DiagonalGaussianDistribution(object):
-    def __init__(self, parameters, deterministic=False, channel_dim=1):
-        self.parameters = parameters.float()
-        self.mean, self.logvar = torch.chunk(parameters, 2, dim=channel_dim)
-        self.sum_dims = tuple(range(1, self.mean.dim()))
-        self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
-        self.deterministic = deterministic
-        self.std = torch.exp(0.5 * self.logvar)
-        self.var = torch.exp(self.logvar)
-        if self.deterministic:
-            self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
-
-    @torch.autocast("cuda", enabled=False)
-    def sample(self):
-        x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
-        return x
-
-    @torch.autocast("cuda", enabled=False)
-    def kl(self, other=None):
-        if self.deterministic:
-            return torch.Tensor([0.0])
-        else:
-            if other is None:
-                return 0.5 * torch.sum(
-                    torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar,
-                    dim=self.sum_dims,
-                )
-            else:
-                return 0.5 * torch.sum(
-                    torch.pow(self.mean - other.mean, 2) / other.var
-                    + self.var / other.var
-                    - 1.0
-                    - self.logvar
-                    + other.logvar,
-                    dim=self.sum_dims,
-                )
-
-    @torch.autocast("cuda", enabled=False)
-    def nll(self, sample, dims=None):
-        if self.deterministic:
-            return torch.Tensor([0.0])
-        logtwopi = np.log(2.0 * np.pi)
-        return 0.5 * torch.sum(
-            logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
-            dim=dims or self.sum_dims,
-        )
-
-    @torch.autocast("cuda", enabled=False)
-    def mode(self):
-        return self.mean
-
-
 class AutoencoderKL(nn.Module):
     def __init__(
         self,
-        embed_dim,
-        ch_mult,
+        resolution=256,
+        embed_dim=32,
+        ch_mult=(1, 1, 2, 2, 4),
         use_variational=True,
         ckpt_path=None,
         scale_factor=1.0,
@@ -434,20 +388,30 @@ class AutoencoderKL(nn.Module):
         attn_resolutions=(),
         pixel_shuffle=False,
         name=None,
-        gamma=0.0,
+        gamma=3.0,
+        # aux model parameters
+        aux_model_type="",
+        aux_dec_type="transformer",
+        aux_model_size="tiny",
+        aux_input_type="noisy",
+        aux_cls_token=False,
+        diff_cls_token=False,
     ):
         super().__init__()
         self.name = name if name is not None else "autoencoder"
-        logger.info(f"[AutoencoderKL] Initializing {self.name} with {embed_dim} dimensions")
-        self.encoder = Encoder(ch_mult=ch_mult, z_channels=embed_dim)
-        self.decoder = Decoder(ch_mult=ch_mult, z_channels=embed_dim, attn_resolutions=attn_resolutions)
-        self.use_variational = use_variational
-        mult = 2 if self.use_variational else 1
-        self.quant_conv = torch.nn.Conv2d(2 * embed_dim, mult * embed_dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(embed_dim, embed_dim, 1)
+        self.resolution = resolution
         self.embed_dim = embed_dim
         self.scale_factor = scale_factor
         self.pixel_shuffle = pixel_shuffle
+        self.downsample_scale = 2 ** (len(ch_mult) - 1)
+        self.use_variational = use_variational
+        mult = 2 if self.use_variational else 1
+        
+        logger.info(f"[AutoencoderKL] Initializing {self.name} with {embed_dim} dimensions")
+        self.encoder = Encoder(ch_mult=ch_mult, z_channels=embed_dim)
+        self.decoder = Decoder(ch_mult=ch_mult, z_channels=embed_dim, attn_resolutions=attn_resolutions)
+        self.quant_conv = torch.nn.Conv2d(2 * embed_dim, mult * embed_dim, 1)
+        self.post_quant_conv = torch.nn.Conv2d(embed_dim, embed_dim, 1)
         if isinstance(mean, np.ndarray) or isinstance(mean, list):
             mean = np.array(mean).reshape(1, -1, 1, 1)
             std = np.array(std).reshape(1, -1, 1, 1)
@@ -455,6 +419,42 @@ class AutoencoderKL(nn.Module):
         self.register_buffer("std", torch.tensor(std), persistent=False)
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path)
+        
+        # aux model parameters
+        self.aux_model_type = aux_model_type
+        self.aux_dec_type = aux_dec_type
+        self.aux_model_size = aux_model_size
+        self.aux_input_type = aux_input_type
+        self.aux_cls_token = aux_cls_token
+        self.diff_cls_token = diff_cls_token
+
+        self.use_aux = False
+        if aux_model_type != "":
+            self.use_aux = True
+            aux_dec = AuxiliaryDecoder_models[aux_dec_type]
+            
+            self.aux_foundation_models = nn.ModuleDict()
+            self.aux_foundation_models_transforms = dict()
+            self.aux_decoders = nn.ModuleDict()
+
+            aux_token_channels = self.embed_dim
+
+            if "dinov2" in aux_model_type:
+                aux_foundation_model, transforms = create_foundation_model("dinov2")
+                aux_foundation_model.eval()
+                aux_foundation_model.requires_grad_(False)
+                self.aux_foundation_models["dinov2"] = aux_foundation_model
+                self.aux_foundation_models_transforms["dinov2"] = transforms
+                
+                self.aux_decoders["dinov2"] = aux_dec(
+                    img_size=self.resolution,
+                    patch_size=self.downsample_scale,
+                    model_size=self.aux_model_size,
+                    token_channels=aux_token_channels,
+                    aux_embed_dim=aux_foundation_model.num_features,
+                    aux_cls_token=self.aux_cls_token,
+                )
+
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
         logger.info(f"[AutoencoderKL] {self.name} params: {params_M:.2f}M")
         self.gamma = gamma
@@ -525,12 +525,66 @@ class AutoencoderKL(nn.Module):
             time_input = time_input.expand(-1, c, h, w)
             noises = torch.randn(bsz, c, h, w, device=device) * self.gamma
             z = (1 - time_input) * z + time_input * noises
+        
+        if self.use_aux and self.training:
+            x_aux = (x + 1) * 0.5
+            z_latents_aux = z.permute(0, 2, 3, 1).reshape(bsz, h * w, c)
+            if self.aux_cls_token:
+                z_latents_aux_cls = z_latents_aux.mean(dim=1, keepdim=True)
+                z_latents_aux = torch.cat([z_latents_aux_cls, z_latents_aux], dim=1)
+            
+            aux_features = []
+            pred_aux_features = []
+
+            for model_type in self.aux_foundation_models.keys():
+                aux_foundation_model = self.aux_foundation_models[model_type]
+                transforms = self.aux_foundation_models_transforms[model_type]
+                aux_decoder = self.aux_decoders[model_type]
+
+                if model_type == "dinov2":
+                    x_dino = transforms(x_aux)
+                    x_dino = F.interpolate(x_dino, size=(224, 224), mode='bilinear', align_corners=False)
+                    x_dino = x_dino.to(dtype=x.dtype)
+                    with torch.inference_mode():
+                        if self.aux_cls_token:
+                            aux_feature = aux_foundation_model.forward_features(x_dino)   # [B, 257, dim]
+                        else:
+                            aux_feature = aux_foundation_model.forward_features(x_dino)[:, 1:]   # [B, 256, dim]
+                else:
+                    raise ValueError(f"Unknown foundation model type: {model_type}")
+                
+                pred_aux_feature = aux_decoder(z_latents_aux, ids_restore=None)
+                
+                if aux_feature.shape[1] != pred_aux_feature.shape[1]:
+                    bsz, seq_len, dim = aux_feature.shape
+                    aux_feature_h = int(seq_len ** 0.5)
+                    aux_feature = aux_feature.reshape(bsz, aux_feature_h, aux_feature_h, dim).permute(0, 3, 1, 2)
+                    aux_feature = F.interpolate(aux_feature, size=(h, w), mode='bilinear', align_corners=False)
+                    aux_feature = aux_feature.permute(0, 2, 3, 1).reshape(bsz, h * w, dim)
+                
+                aux_features.append(aux_feature)
+                pred_aux_features.append(pred_aux_feature)
+
+        else:
+            aux_features = None
+            pred_aux_features = None
+        
         reconstructions = self.decode(z)
-        return reconstructions, posterior, z
+        
+        result_dict = dict(
+            posteriors=posterior,
+            z_latents=z,
+            ids_restore=None,
+            vf_feature=None,
+            aux_features=aux_features,
+            pred_aux_features=pred_aux_features,
+        )
+
+        return reconstructions, result_dict
 
     def forward(self, x):
-        reconstructions, posterior, z = self.autoencode(x)
-        return reconstructions, posterior
+        reconstructions, result_dict = self.autoencode(x)
+        return reconstructions, result_dict
 
     def denormalize_z(self, z):
         z = z * self.std.to(z) / self.scale_factor + self.mean.to(z)
@@ -711,16 +765,34 @@ def mar_vae(load_ckpt=True, load_from=None, gamma=0.0) -> AutoencoderKL:
     )
 
 
-def va_vae(load_ckpt=True, load_from=None, gamma=0.0) -> AutoencoderKL:
+def va_vae(
+    resolution=256,
+    embed_dim=32,
+    gamma=3.0,
+    aux_model_type="",
+    aux_dec_type="transformer",
+    aux_model_size="tiny",
+    aux_input_type="noisy",
+    aux_cls_token=False,
+    diff_cls_token=False,
+    ckpt_path=None,
+    **kwargs,
+) -> AutoencoderKL:
     return AutoencoderKL(
         name="vavae",
-        embed_dim=32,
+        resolution=resolution,
+        embed_dim=embed_dim,
         ch_mult=(1, 1, 2, 2, 4),
         scale_factor=1.0,
         attn_resolutions=(16,),
-        mean=CONSTANTS["vavae_mean"],
-        std=CONSTANTS["vavae_std"],
-        ckpt_path=("pretrained_models/vae/vavae-imagenet256-f16d32-dinov2-clean.pth" if load_ckpt else None),
+        gamma=gamma,
+        aux_model_type=aux_model_type,
+        aux_dec_type=aux_dec_type,
+        aux_model_size=aux_model_size,
+        aux_input_type=aux_input_type,
+        aux_cls_token=aux_cls_token,
+        diff_cls_token=diff_cls_token,
+        ckpt_path=ckpt_path,
     )
 
 
@@ -733,3 +805,8 @@ def eq_vae(load_ckpt=True, load_from=None, gamma=0.0) -> DiffusersAutoencoderKL:
 
 
 VAE_models = {"marvae": mar_vae, "vavae": va_vae, "sdvae": sd_vae, "eqvae": eq_vae}
+
+AuxiliaryDecoder_models = {
+    "transformer": TransformerDecoder,
+    "mlp": MLPDecoder,
+}
