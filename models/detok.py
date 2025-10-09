@@ -1045,7 +1045,7 @@ class DeTok(nn.Module):
                 aux_cls_token=aux_cls_token,
                 pooling_cls_token=pooling_cls_token,
                 diff_cls_token=diff_cls_token,
-                num_register_tokens=num_register_tokens,
+                num_register_tokens=0,
             )
         self.decoder = Decoder(
             img_size=img_size,
@@ -1053,7 +1053,7 @@ class DeTok(nn.Module):
             model_size=vit_dec_model_size,
             token_channels=token_channels,
             diff_cls_token=diff_cls_token,
-            num_register_tokens=0,
+            num_register_tokens=num_register_tokens,
         )
 
         # model configuration
