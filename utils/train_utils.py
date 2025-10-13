@@ -1146,7 +1146,7 @@ def collect_tokenizer_stats(
     def compute_stats(sum_val, sum_sq_val, count):
         if count > 0:
             mean = sum_val / count
-            std = ((sum_sq_val / count) - mean**2).sqrt()
+            std = ((sum_sq_val / count) - mean ** 2).sqrt()
             return mean, std
         return None, None
 

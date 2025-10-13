@@ -325,7 +325,10 @@ class Encoder(nn.Module):
         q, k = apply_rotary_emb(q, self.rope_tensor.expand(bsz, -1, -1)), apply_rotary_emb(k, self.rope_tensor.expand(bsz, -1, -1))
         attn_map = (q @ k.transpose(-2, -1)) * last_block.attn.head_dim ** -0.5
         attn_map = attn_map.softmax(dim=-1).mean(dim=1)
-        attn_map_cls = attn_map[:, self.num_register_tokens, 1 + self.num_register_tokens:]
+        if self.aux_cls_token and not self.pooling_cls_token:
+            attn_map_cls = attn_map[:, self.num_register_tokens, 1 + self.num_register_tokens:]
+        else:
+            attn_map_cls = attn_map[:, self.num_register_tokens:, self.num_register_tokens:].mean(dim=1)
         return attn_map_cls
 
     def forward(self, x: Tensor):
@@ -1053,7 +1056,7 @@ class DeTok(nn.Module):
             model_size=vit_dec_model_size,
             token_channels=token_channels,
             diff_cls_token=diff_cls_token,
-            num_register_tokens=num_register_tokens,
+            num_register_tokens=0,
         )
 
         # model configuration
@@ -1187,6 +1190,23 @@ class DeTok(nn.Module):
                     aux_embed_dim=aux_foundation_model.num_features,
                     aux_cls_token=aux_cls_token,
                     pooling_cls_token=pooling_cls_token,
+                )
+                
+            if "detok_BB" in aux_model_type:
+                aux_foundation_model, transforms = create_foundation_model("detok_BB")
+                aux_foundation_model.eval()
+                aux_foundation_model.requires_grad_(False)
+                self.aux_foundation_models["detok_BB"] = aux_foundation_model
+                self.aux_foundation_models_transforms["detok_BB"] = transforms
+                
+                self.aux_decoders["detok_BB"] = aux_dec(
+                    img_size=img_size,
+                    patch_size=patch_size,
+                    model_size=vit_aux_model_size,
+                    token_channels=aux_token_channels,
+                    aux_embed_dim=16,
+                    aux_cls_token=False,
+                    pooling_cls_token=False,
                 )
 
             if "pixel" in aux_model_type:
@@ -1411,13 +1431,21 @@ class DeTok(nn.Module):
                     with torch.inference_mode():
                         aux_feature = aux_foundation_model.forward_features(x_siglip)   # [B, 256, dim]
                 
+                elif model_type == "detok_BB":
+                    x_detok = x
+                    with torch.inference_mode():
+                        aux_feature = aux_foundation_model.encode(x_detok, sampling=False)["z_latents"]
+                    
                 elif model_type == "pixel":
                     aux_feature = x_aux
 
                 else:
                     raise ValueError(f"Unknown foundation model type: {model_type}")
                 
-                pred_aux_feature = aux_decoder(z_latents_aux, ids_restore=ids_restore)
+                if model_type == "detok_BB" and self.encoder.aux_cls_token:
+                    pred_aux_feature = aux_decoder(z_latents_aux[:, 1:], ids_restore=ids_restore)
+                else:
+                    pred_aux_feature = aux_decoder(z_latents_aux, ids_restore=ids_restore)
                 
                 if aux_feature.shape[1] != pred_aux_feature.shape[1]:
                     bsz, seq_len, dim = aux_feature.shape

@@ -493,8 +493,8 @@ class AutoencoderKL(nn.Module):
             self.register_buffer("std", torch.tensor(std), persistent=False)
         else:
             n_chans = mean.shape[-1]
-            self.register_buffer("mean", torch.tensor(mean).reshape(1, 1, n_chans), persistent=False)
-            self.register_buffer("std", torch.tensor(std).reshape(1, 1, n_chans), persistent=False)
+            self.register_buffer("mean", torch.tensor(mean).reshape(1, n_chans, 1, 1), persistent=False)
+            self.register_buffer("std", torch.tensor(std).reshape(1, n_chans, 1, 1), persistent=False)
         logger.info(f"Resetting mean and std ({mean.shape=}, {std.shape=})")
         logger.info(f"Mean: {self.mean}, Std: {self.std}")
 
