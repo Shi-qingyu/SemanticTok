@@ -13,7 +13,7 @@ tokenizer_exp_name=detokBB-ch16-g3.0-m0.7-auxdinov2
 num_register_tokens=0
 
 force_one_d_seq=0
-exp_name=lightningdit_xl-${tokenizer_exp_name}-2025-10-08
+exp_name=lightningdit_xl_qknorm-${tokenizer_exp_name}-2025-10-15
 
 project=gen_model_training
 batch_size=32  # nnodes * ngpus * batch_size = 1024
@@ -48,6 +48,6 @@ torchrun \
     --force_one_d_seq $force_one_d_seq \
     --num_sampling_steps 250 --cfg 1.3 \
     --cfg_list 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 \
-    --online_eval --eval_freq 800 \
+    --eval_freq 800 \
     --vis_freq 50 --eval_bsz 256 \
     --data_path ./data/imagenet/train

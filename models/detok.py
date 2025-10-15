@@ -380,14 +380,11 @@ class Encoder(nn.Module):
         if self.aux_cls_token:
             if self.pooling_cls_token:
                 z_cls = z.mean(1).unsqueeze(1)
-                z = z
                 z_aux_cls = z_aux.mean(1).unsqueeze(1)
                 z_aux = torch.cat([z_aux_cls, z_aux], dim=1)
             else:
                 z_cls = z[:, 0].unsqueeze(1)
                 z = z[:, 1:]
-                z_aux_cls = z_aux[:, 0].unsqueeze(1)
-                z_aux = z_aux
         
         if self.diff_cls_token:
             z = torch.cat([z_cls, z], dim=1)
@@ -853,6 +850,7 @@ class TransformerDecoder(nn.Module):
         token_channels: int = 16,
         aux_embed_dim: int = 1024,
         aux_cls_token: bool = False,
+        use_adaptive_channels: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -869,6 +867,7 @@ class TransformerDecoder(nn.Module):
         self.token_channels = token_channels
         self.aux_embed_dim = aux_embed_dim
         self.aux_cls_token = aux_cls_token
+        self.use_adaptive_channels = use_adaptive_channels
         
         # learnable embeddings
         scale = width ** -0.5
@@ -878,7 +877,14 @@ class TransformerDecoder(nn.Module):
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
         
         # token embedding
-        self.token_embedding = nn.Linear(self.token_channels, width)
+        if self.use_adaptive_channels:
+            self.token_embedding = nn.Sequential(
+                nn.Linear(self.token_channels, 16),
+                nn.SiLU(),
+                nn.Linear(16, width),
+            )
+        else:
+            self.token_embedding = nn.Linear(self.token_channels, width)
         
         # mask embedding
         self.mask_embedding = nn.Parameter(torch.zeros(1, 1, width))
@@ -1122,6 +1128,7 @@ class DeTok(nn.Module):
                     aux_embed_dim=aux_foundation_model.num_features,
                     aux_cls_token=aux_cls_token,
                     pooling_cls_token=pooling_cls_token,
+                    use_adaptive_channels=use_adaptive_channels,
                 )
 
             if "dinov3" in aux_model_type:
@@ -1139,6 +1146,7 @@ class DeTok(nn.Module):
                     aux_embed_dim=aux_foundation_model.config.hidden_size,
                     aux_cls_token=aux_cls_token,
                     pooling_cls_token=pooling_cls_token,
+                    use_adaptive_channels=use_adaptive_channels,
                 )
             
             if "sam" in aux_model_type:
@@ -1386,7 +1394,7 @@ class DeTok(nn.Module):
                     x_dinov3 = (x_aux * 255).to(torch.uint8)
                     inputs = transforms(x_dinov3, return_tensors="pt").to(x.device)
                     inputs["pixel_values"] = F.interpolate(
-                        inputs["pixel_values"], 
+                        inputs["pixel_values"],
                         size=(256, 256), 
                         mode="bilinear", 
                         align_corners=False
