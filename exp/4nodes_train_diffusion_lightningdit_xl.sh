@@ -13,7 +13,7 @@ tokenizer_exp_name=detokBB-ch16-g3.0-m0.7-auxdinov2
 num_register_tokens=0
 
 force_one_d_seq=0
-exp_name=lightningdit_xl_qknorm-${tokenizer_exp_name}-2025-10-15
+exp_name=lightningdit_xl-qknorm-${tokenizer_exp_name}-2025-10-15
 
 project=gen_model_training
 batch_size=32  # nnodes * ngpus * batch_size = 1024
