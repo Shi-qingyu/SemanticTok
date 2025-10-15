@@ -219,6 +219,11 @@ def create_generation_model(args):
             legacy_mode=args.legacy_mode, # legacy mode: cfg on the first three channels only
             qk_norm=args.qk_norm,
         )
+    elif args.model in models.DiTDDT_models:
+        model = models.DiTDDT_models[args.model](
+            img_size=args.img_size,
+            token_channels=args.token_channels,
+        )
     elif args.model in models.ARDiff_models:
         model = models.ARDiff_models[args.model](
             img_size=args.img_size,

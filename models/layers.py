@@ -551,6 +551,68 @@ class VisionRotaryEmbeddingFast(nn.Module):
         return torch.cat([prefix_tokens, t], dim=-2)
 
 
+class DDTVisionRotaryEmbeddingFast(nn.Module):
+    def __init__(
+        self,
+        dim,
+        pt_seq_len=16,
+        ft_seq_len=None,
+        custom_freqs=None,
+        freqs_for='lang',
+        theta=10000,
+        max_freq=10,
+        num_freqs=1,
+    ):
+        super().__init__()
+        if custom_freqs:
+            freqs = custom_freqs
+        elif freqs_for == 'lang':
+            freqs = 1. / (theta ** (torch.arange(0, dim, 2)[:(dim // 2)].float() / dim))
+        elif freqs_for == 'pixel':
+            freqs = torch.linspace(1., max_freq / 2, dim // 2) * pi
+        elif freqs_for == 'constant':
+            freqs = torch.ones(num_freqs).float()
+        else:
+            raise ValueError(f'unknown modality {freqs_for}')
+
+        if ft_seq_len is None:
+            ft_seq_len = pt_seq_len
+        t = torch.arange(ft_seq_len) / ft_seq_len * pt_seq_len
+
+        freqs = torch.einsum('..., f -> ... f', t, freqs)
+        freqs = repeat(freqs, '... n -> ... (n r)', r=2)
+        freqs = broadcat((freqs[:, None, :], freqs[None, :, :]), dim=-1)
+
+        freqs_cos = freqs.cos().view(-1, freqs.shape[-1])
+        freqs_sin = freqs.sin().view(-1, freqs.shape[-1])
+
+        self.register_buffer("freqs_cos", freqs_cos)
+        self.register_buffer("freqs_sin", freqs_sin)
+
+        # print('======== shape of rope freq', self.freqs_cos.shape,freqs_sin.shape, '========')
+
+    def forward(self, t):
+        # print('======== shape of t', t.shape, '========')
+        _, _, Lt, _ = t.shape # B, num_heads, L, dim
+        L, _ = self.freqs_cos.shape # L, dim
+        repeat = Lt // L
+        freqs_cos, freqs_sin = self.freqs_cos, self.freqs_sin
+        if repeat != 1:
+            freqs_cos = freqs_cos.repeat_interleave(repeat, dim=0)
+            freqs_sin = freqs_sin.repeat_interleave(repeat, dim=0)
+            # print('======== shape of rope freq', freqs_cos.shape,freqs_sin.shape, '========')
+            # print(f'======== repeat {repeat} times ========')
+            # print(f'======== shape of t {t.shape} ========')
+            # # assert the repeat is twice
+            # #assert repeat == 2, f'repeat should be 2, but got {repeat}'
+            # # check the content of the repeated freqs
+            # # the content at odd index should be the same as the content at even index
+            # assert torch.allclose(freqs_cos[::2], freqs_cos[1::2]), 'repeated freqs_cos are not the same'
+            # assert torch.allclose(freqs_sin[::2], freqs_sin[1::2]), 'repeated freqs_sin are not the same'
+        # apply repeated freqs
+        return t * freqs_cos + rotate_half(t) * freqs_sin
+
+
 def pos_enc(x, min_deg=0, max_deg=10, append_identity=True):
     """The positional encoding used by the original NeRF paper."""
     scales = 2 ** torch.arange(min_deg, max_deg).float()
@@ -686,3 +748,305 @@ def rotate_half(x):
     x1, x2 = x.unbind(dim=-1)
     x = torch.stack((-x2, x1), dim=-1)
     return rearrange(x, "... d r -> ... (d r)")
+
+
+class RMSNorm(torch.nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        """
+        Initialize the RMSNorm normalization layer.
+
+        Args:
+            dim (int): The dimension of the input tensor.
+            eps (float, optional): A small value added to the denominator for numerical stability. Default is 1e-6.
+
+        Attributes:
+            eps (float): A small value added to the denominator for numerical stability.
+            weight (nn.Parameter): Learnable scaling parameter.
+
+        """
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        """
+        Apply the RMSNorm normalization to the input tensor.
+
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The normalized tensor.
+
+        """
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        """
+        Forward pass through the RMSNorm layer.
+
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The output tensor after applying RMSNorm.
+
+        """
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
+
+class NormAttention(nn.Module):
+    """
+    Attention module of LightningDiT.
+    """
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = False,
+        qk_norm: bool = False,
+        attn_drop: float = 0.,
+        proj_drop: float = 0.,
+        norm_layer: nn.Module = nn.LayerNorm,
+        fused_attn: bool = True,
+        use_rmsnorm: bool = False,
+    ) -> None:
+        super().__init__()
+        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+        
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.fused_attn = fused_attn
+        
+        if use_rmsnorm:
+            norm_layer = RMSNorm
+            
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+        
+    def forward(self, x: torch.Tensor, rope=None) -> torch.Tensor:
+        B, N, C = x.shape
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
+        
+        if rope is not None:
+            q = rope(q)
+            k = rope(k)
+
+        if self.fused_attn:
+            q = q.to(v.dtype)
+            k = k.to(v.dtype) # rope may change the q,k's dtype
+            x = F.scaled_dot_product_attention(
+                q, k, v,
+                dropout_p=self.attn_drop.p if self.training else 0.,
+            )
+        else:
+            q = q * self.scale
+            attn = q @ k.transpose(-2, -1)
+            attn = attn.softmax(dim=-1)
+            attn = self.attn_drop(attn)
+            x = attn @ v
+
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+    
+
+class GaussianFourierEmbedding(nn.Module):
+    """
+    Gaussian Fourier Embedding for timesteps. 
+    """
+    embedding_size: int = 256
+    scale: float = 1.0
+    def __init__(self, hidden_size: int, embedding_size: int = 256, scale: float = 1.0):
+        super().__init__()
+        self.embedding_size = embedding_size
+        self.scale = scale
+        self.W = nn.Parameter(torch.normal(0, self.scale, (embedding_size,)), requires_grad=False)
+        self.mlp = nn.Sequential(
+            nn.Linear(embedding_size * 2, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True),
+        )
+    def forward(self, t):
+        with torch.no_grad():
+            W = self.W # stop gradient manually
+        t = t[:, None] * W[None, :] * 2 * torch.pi
+        # Concatenate sine and cosine transformations
+        t_embed =  torch.cat([torch.sin(t), torch.cos(t)], dim=-1)
+        t_embed = self.mlp(t_embed)
+        return t_embed
+
+
+def DDTModulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """
+    Applies per-segment modulation to x.
+
+    Args:
+        x: Tensor of shape (B, L_x, D)
+        shift: Tensor of shape (B, L, D)
+        scale: Tensor of shape (B, L, D)
+    Returns:
+        Tensor of shape (B, L_x, D): x * (1 + scale) + shift, 
+        with shift and scale repeated to match L_x if necessary.
+    """
+    B, Lx, D = x.shape
+    _, L, _ = shift.shape
+    if Lx % L != 0:
+        raise ValueError(f"L_x ({Lx}) must be divisible by L ({L})")
+    repeat = Lx // L
+    if repeat != 1:
+        # repeat each of the L segments 'repeat' times along the length dim
+        shift = shift.repeat_interleave(repeat, dim=1)
+        scale = scale.repeat_interleave(repeat, dim=1)
+    # apply modulation
+    return x * (1 + scale) + shift
+
+
+def DDTGate(x: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+    """
+    Applies per-segment modulation to x.
+
+    Args:
+        x: Tensor of shape (B, L_x, D)
+        gate: Tensor of shape (B, L, D)
+    Returns:
+        Tensor of shape (B, L_x, D): x * gate, 
+        with gate repeated to match L_x if necessary.
+    """
+    B, Lx, D = x.shape
+    _, L, _ = gate.shape
+    if Lx % L != 0:
+        raise ValueError(f"L_x ({Lx}) must be divisible by L ({L})")
+    repeat = Lx // L
+    if repeat != 1:
+        # repeat each of the L segments 'repeat' times along the length dim
+        # print(f"gate shape: {gate.shape}, x shape: {x.shape}")
+        gate = gate.repeat_interleave(repeat, dim=1)
+    # apply modulation
+    return x * gate
+
+
+class LightningDDTBlock(nn.Module):
+    """
+    Lightning DiT Block. We add features including: 
+    - ROPE
+    - QKNorm 
+    - RMSNorm
+    - SwiGLU
+    - No shift AdaLN.
+    Not all of them are used in the final model, please refer to the paper for more details.
+    """
+
+    def __init__(
+        self,
+        hidden_size,
+        num_heads,
+        mlp_ratio=4.0,
+        use_qknorm=False,
+        use_swiglu=True,
+        use_rmsnorm=True,
+        wo_shift=False,
+        **block_kwargs
+    ):
+        super().__init__()
+
+        # Initialize normalization layers
+        if not use_rmsnorm:
+            self.norm1 = nn.LayerNorm(
+                hidden_size, elementwise_affine=False, eps=1e-6)
+            self.norm2 = nn.LayerNorm(
+                hidden_size, elementwise_affine=False, eps=1e-6)
+        else:
+            self.norm1 = RMSNorm(hidden_size)
+            self.norm2 = RMSNorm(hidden_size)
+
+        # Initialize attention layer
+        self.attn = NormAttention(
+            hidden_size,
+            num_heads=num_heads,
+            qkv_bias=True,
+            qk_norm=use_qknorm,
+            use_rmsnorm=use_rmsnorm,
+            **block_kwargs
+        )
+
+        # Initialize MLP layer
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        def approx_gelu(): return nn.GELU(approximate="tanh")
+        if use_swiglu:
+            # here we did not use SwiGLU from xformers because it is not compatible with torch.compile for now.
+            self.mlp = SwiGLUFFN(hidden_size, int(2/3 * mlp_hidden_dim))
+        else:
+            self.mlp = Mlp(
+                in_features=hidden_size,
+                hidden_features=mlp_hidden_dim,
+                act_layer=approx_gelu,
+                drop=0
+            )
+
+        # Initialize AdaLN modulation
+        if wo_shift:
+            self.adaLN_modulation = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(hidden_size, 4 * hidden_size, bias=True)
+            )
+        else:
+            self.adaLN_modulation = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            )
+        self.wo_shift = wo_shift
+
+    def forward(self, x, c, feat_rope=None):
+        if len(c.shape) < len(x.shape):
+            c = c.unsqueeze(1)  # (B, 1, C)
+        if self.wo_shift:
+            scale_msa, gate_msa, scale_mlp, gate_mlp = self.adaLN_modulation(
+                c).chunk(4, dim=-1)
+            shift_msa = None
+            shift_mlp = None
+        else:
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(
+                c).chunk(6, dim=-1)
+        x = x + DDTGate(self.attn(DDTModulate(self.norm1(x),
+                        shift_msa, scale_msa), rope=feat_rope), gate_msa)
+        x = x + DDTGate(self.mlp(DDTModulate(self.norm2(x),
+                        shift_mlp, scale_mlp)), gate_mlp)
+        return x
+
+
+class DDTFinalLayer(nn.Module):
+    """
+    The final layer of DDT.
+    """
+
+    def __init__(self, hidden_size, patch_size, out_channels, use_rmsnorm=False):
+        super().__init__()
+        if not use_rmsnorm:
+            self.norm_final = nn.LayerNorm(
+                hidden_size, elementwise_affine=False, eps=1e-6)
+        else:
+            self.norm_final = RMSNorm(hidden_size)
+        self.linear = nn.Linear(
+            hidden_size, patch_size * patch_size * out_channels, bias=True)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 2 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, c):
+        if len(c.shape) < len(x.shape):
+            c = c.unsqueeze(1)
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
+        x = DDTModulate(self.norm_final(x), shift, scale)  # no gate
+        x = self.linear(x)
+        return x

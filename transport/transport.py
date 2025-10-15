@@ -65,6 +65,7 @@ class Transport:
         partitial_train=None,
         partial_ratio=1.0,
         shift_lg=False,
+        time_dist_shift=1.0,
     ):
         path_options = {
             PathType.LINEAR: path.ICPlan,
@@ -84,7 +85,8 @@ class Transport:
         self.shift_lg = shift_lg
         self.diff_cls_token = diff_cls_token
         self.cls_weight = cls_weight
-
+        self.time_dist_shift = time_dist_shift
+        
     def prior_logp(self, z):
         """
         Standard multivariate normal prior
@@ -191,6 +193,8 @@ class Transport:
             t = th.rand((x1.shape[0],)) * (sp_timesteps[1] - sp_timesteps[0]) + sp_timesteps[0]
 
         t = t.to(x1)
+        
+        t = self.time_dist_shift * t / (1 + (self.time_dist_shift - 1) * t)
         return t, x0, x1
 
     def training_losses(

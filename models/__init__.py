@@ -7,3 +7,4 @@ from .ema import SimpleEMAModel
 from .lightningdit import LightningDiT_models
 from .mar import MAR_models
 from .sit import SiT_models
+from .DDT import DiTDDT_models

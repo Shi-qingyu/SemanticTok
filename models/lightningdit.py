@@ -47,7 +47,7 @@ class LightningDiT(nn.Module):
         force_one_d_seq=0,
         learn_sigma=False,  # no learn_sigma in SiT
         legacy_mode=False,
-        qk_norm=True,
+        qk_norm=False,
     ):
         super().__init__()
 
