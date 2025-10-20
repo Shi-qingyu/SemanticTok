@@ -12,7 +12,7 @@ batch_size=32
 data_path=./data/imagenet/train
 
 model=detok_BB
-token_channels=128
+token_channels=768
 patch_size=16
 pretrained_model_name_or_path=""
 num_register_tokens=0
@@ -34,7 +34,7 @@ mask_ratio_min=-0.1
 mask_ratio_type="random"
 vit_aux_model_size="tiny"
 
-exp_name="detokBB${pretrained_model_name_or_path}-ch${token_channels}-p${patch_size}-g${gamma}-m${mask_ratio_min}${mask_ratio}${mask_ratio_type}-aux${aux_model_type}${aux_dec_type}${aux_input_type}${aux_target}"
+exp_name="detokBB${pretrained_model_name_or_path}-ch${token_channels}-p${patch_size}-g${gamma}-m${mask_ratio_min}${mask_ratio}${mask_ratio_type}-aux${aux_model_type}${aux_dec_type}${aux_input_type}${aux_target}-10-20"
 
 # add variable
 export MASTER_ADDR=${ARNOLD_WORKER_0_HOST}
@@ -115,7 +115,7 @@ torchrun \
     --token_channels $token_channels \
     --tokenizer $tokenizer --use_ema_tokenizer --collect_tokenizer_stats \
     --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl \
-    --load_tokenizer_from work_dirs/tokenizer_training/$tokenizer_exp_name/checkpoints/latest.pth \
+    --load_tokenizer_from work_dirs/tokenizer_training/$tokenizer_exp_name/checkpoints/epoch_0199.pth \
     --model $model \
     --force_one_d_seq $force_one_d_seq \
     --lr 2e-4 \
