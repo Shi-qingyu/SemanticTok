@@ -51,11 +51,11 @@ export NODE_RANK=${ARNOLD_ID}
 echo "[INFO] per-GPU batch=${batch_size}"
 
 torchrun \
-  --nnodes="${WORLD_SIZE:-1}" \
+  --nnodes="${NNODES}" \
   --nproc_per_node="${NPROC_PER_NODE}" \
-  --node_rank="${RANK:-0}" \
-  --master_addr="${MASTER_ADDR:-127.0.0.1}" \
-  --master_port="${MASTER_PORT:-29501}" \
+  --node_rank="${NODE_RANK}" \
+  --master_addr="${MASTER_ADDR}" \
+  --master_port="${PORT}" \
   main_reconstruction.py \
   --project "${project}" --exp_name "${exp_name}" --auto_resume \
   --batch_size "${batch_size}" --model "${model}" \
@@ -104,13 +104,12 @@ export NODE_RANK=${ARNOLD_ID}
 
 echo "[INFO] per-GPU batch=${batch_size}"
 
-
 torchrun \
+    --nnodes="${NNODES}" \
     --nproc_per_node="${NPROC_PER_NODE}" \
-    --nnodes="${WORLD_SIZE:-1}" \
-    --node_rank="${RANK:-0}" \
-    --master_addr="${MASTER_ADDR:-127.0.0.1}" \
-    --master_port="${MASTER_PORT:-29500}" \
+    --node_rank="${NODE_RANK}" \
+    --master_addr="${MASTER_ADDR}" \
+    --master_port="${PORT}" \
     main_diffusion.py \
     --project $project --exp_name $exp_name --auto_resume \
     --batch_size $batch_size --epochs $epochs \
