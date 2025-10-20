@@ -666,12 +666,16 @@ class DINOv3Encoder(nn.Module):
     def __init__(
         self,
         pretrained_model_name_or_path: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
-        frozen_dinov3: bool = True,
+        frozen_dinov3: bool = False,
         img_size: int = 256,
         token_channels: int = 16,
+        last_layer_feature: bool = False,
         **kwargs
     ) -> None:
         super().__init__()
+        if os.path.exists("offline_models/dinov3_vit_base_patch14"):
+            pretrained_model_name_or_path = "offline_models/dinov3_vit_base_patch14"
+            
         self.processor = AutoImageProcessor.from_pretrained(pretrained_model_name_or_path)
         self.model = AutoModel.from_pretrained(pretrained_model_name_or_path)
         self.frozen_dinov3 = frozen_dinov3
@@ -682,7 +686,8 @@ class DINOv3Encoder(nn.Module):
         self.img_size = img_size
         # needs to split into mean and std
         self.token_channels = token_channels * 2
-
+        self.last_layer_feature = last_layer_feature
+        
         # output layer
         self.width = self.config.hidden_size
         norm_layer = partial(nn.RMSNorm, eps=1e-6)
@@ -720,6 +725,10 @@ class DINOv3Encoder(nn.Module):
 
         ret = dict(
             z=z,
+            z_aux=z,
+            ids_restore=None,
+            ids_keep=None,
+            ids_masked=None,
         )
 
         return ret
@@ -1336,12 +1345,12 @@ class DeTok(nn.Module):
             if noise_level > 0.0:
                 noise_level_tensor = torch.full((bsz, 1, 1), noise_level, device=device)
             else:
-                noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
+                # noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
 
                 # Sample noise level using logit normal distribution for better control
                 # Generate from normal distribution and apply sigmoid to get values in (0,1)
-                # normal_samples = torch.randn(bsz, 1, 1, device=device)
-                # noise_level_tensor = torch.sigmoid(normal_samples)
+                normal_samples = torch.randn(bsz, 1, 1, device=device)
+                noise_level_tensor = torch.sigmoid(normal_samples)
                 
             # noise_level_tensor = noise_level_tensor.expand(-1, n_tokens, chans)
             noise = torch.randn(bsz, n_tokens, chans, device=device) * self.gamma

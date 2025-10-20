@@ -696,29 +696,29 @@ def evaluate_generator(
     # ensure evaluation is done before cleanup
     torch.distributed.barrier()
 
-    # # distributed cleanup
-    # if not args.keep_eval_folder:
-    #     start_time = time.perf_counter()
-    #     # each GPU removes only its own files
-    #     subset_files = [f"{eval_dir}/{index:06d}.png" for index in range(start_idx, end_idx)]
-    #     for file_path in subset_files:
-    #         try:
-    #             os.remove(file_path)
-    #         except FileNotFoundError:
-    #             pass
+    # distributed cleanup
+    if not args.keep_eval_folder:
+        start_time = time.perf_counter()
+        # each GPU removes only its own files
+        subset_files = [f"{eval_dir}/{index:06d}.png" for index in range(start_idx, end_idx)]
+        for file_path in subset_files:
+            try:
+                os.remove(file_path)
+            except FileNotFoundError:
+                pass
 
-    #     # ensure all processes wait here before proceeding
-    #     torch.distributed.barrier()
+        # ensure all processes wait here before proceeding
+        torch.distributed.barrier()
 
-    #     # rank 0 removes the directories if they are empty
-    #     if rank == 0:
-    #         if not os.listdir(eval_dir):
-    #             os.rmdir(eval_dir)
-    #         logger.info(f"Removed evaluation folder: {eval_dir}")
-    #     logger.info(f"Cleanup time: {time.perf_counter() - start_time:.2f}s")
+        # rank 0 removes the directories if they are empty
+        if rank == 0:
+            if not os.listdir(eval_dir):
+                os.rmdir(eval_dir)
+            logger.info(f"Removed evaluation folder: {eval_dir}")
+        logger.info(f"Cleanup time: {time.perf_counter() - start_time:.2f}s")
 
-    # # ensure all processes wait here before proceeding
-    # torch.distributed.barrier()
+    # ensure all processes wait here before proceeding
+    torch.distributed.barrier()
     torch.cuda.empty_cache()
     time_str = str(datetime.timedelta(seconds=time.perf_counter() - eval_start_time))
     logger.info(f"Total evaluation time (gen+save+cleanup): {time_str}")
