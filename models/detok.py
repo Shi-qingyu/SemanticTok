@@ -204,14 +204,19 @@ class Encoder(nn.Module):
         pooling_cls_token: bool = False,
         diff_cls_token: bool = False,
         num_register_tokens: int = 0,
+        disable_kl: bool = False,
     ) -> None:
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
         self.grid_size = self.img_size // self.patch_size
         self.model_size = model_size
-        # needs to split into mean and std
-        self.token_channels = token_channels * 2
+        if disable_kl:
+            self.token_channels = token_channels
+        else:
+            # needs to split into mean and std
+            self.token_channels = token_channels * 2
+
         self.mask_ratio = mask_ratio
         self.mask_ratio_min = mask_ratio_min
         self.random_mask_ratio = random_mask_ratio
@@ -222,6 +227,7 @@ class Encoder(nn.Module):
         self.pooling_cls_token = pooling_cls_token
         self.diff_cls_token = diff_cls_token
         self.num_register_tokens = num_register_tokens
+        self.disable_kl = disable_kl
 
         size_dict = SIZE_DICT[self.model_size]
         num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
@@ -1012,6 +1018,7 @@ class DeTok(nn.Module):
         gamma: float = 3.0,
         use_additive_noise: bool = False,
         use_log_normal_noise: bool = False,
+        disable_kl: bool = False,
         # normalization parameters used for generative model training
         mean=0.0,
         std=1.0,
@@ -1065,6 +1072,7 @@ class DeTok(nn.Module):
                 pooling_cls_token=pooling_cls_token,
                 diff_cls_token=diff_cls_token,
                 num_register_tokens=0,
+                disable_kl=disable_kl,
             )
         self.decoder = Decoder(
             img_size=img_size,
@@ -1092,6 +1100,7 @@ class DeTok(nn.Module):
         self.pooling_cls_token = pooling_cls_token
         self.diff_cls_token = diff_cls_token
         self.use_log_normal_noise = use_log_normal_noise
+        self.disable_kl = disable_kl
         
         # initialize weights
         self.apply(self._init_weights)
@@ -1325,21 +1334,25 @@ class DeTok(nn.Module):
         ids_keep = ret["ids_keep"]
         ids_masked = ret["ids_masked"]
 
-        posteriors = self.to_posteriors(z)
-        z_latents = posteriors.sample() if sampling else posteriors.mean
-        
-        if isinstance(self.encoder, DualEncoder):
-            if self.encoder.last_layer_feature:
-                z_latents_aux = ret["z_aux"]
-            else:
-                z_aux = ret["z_aux"]
-                posteriors_aux = self.to_posteriors(z_aux)
-                z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
+        if not self.disable_kl:
+            posteriors = self.to_posteriors(z)
+            z_latents = posteriors.sample() if sampling else posteriors.mean
         else:
-            z_latents_aux = ret["z_aux"]
-            if not self.encoder.last_layer_feature:
-                posteriors_aux = self.to_posteriors(z_latents_aux)
-                z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
+            posteriors = None
+            z_latents = z
+        
+        # if isinstance(self.encoder, DualEncoder):
+        #     if self.encoder.last_layer_feature:
+        #         z_latents_aux = ret["z_aux"]
+        #     else:
+        #         z_aux = ret["z_aux"]
+        #         posteriors_aux = self.to_posteriors(z_aux)
+        #         z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
+        # else:
+        z_latents_aux = ret["z_aux"]
+        if not self.encoder.last_layer_feature and not self.disable_kl:
+            posteriors_aux = self.to_posteriors(z_latents_aux)
+            z_latents_aux = posteriors_aux.sample() if sampling else posteriors_aux.mean
 
         if self.training and self.gamma > 0.0:
             device = z_latents.device

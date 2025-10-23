@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 
@@ -15,8 +15,8 @@ model=detok_BB
 token_channels=16
 patch_size=16
 pretrained_model_name_or_path=""
-num_register_tokens=0
-aux_model_type="dinov3"
+num_register_tokens=4
+aux_model_type="dinov2"
 aux_dec_type="transformer"
 aux_input_type="noisy"
 aux_target="align"

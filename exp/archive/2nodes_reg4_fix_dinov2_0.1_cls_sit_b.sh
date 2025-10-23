@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 
@@ -9,8 +9,8 @@ pip install -r requirements.txt
 
 
 tokenizer_project=tokenizer_training
-tokenizer_exp_name=detokBB-reg0-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoisyalign1.0poolingcls
-num_register_tokens=0
+tokenizer_exp_name=detokBB-reg4-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoisyalign0.1cls
+num_register_tokens=4
 
 force_one_d_seq=0
 exp_name=sit_b-${tokenizer_exp_name}-2025-10-08
@@ -41,7 +41,7 @@ torchrun \
     --batch_size $batch_size --epochs $epochs --use_aligned_schedule \
     --pretrained_model_name_or_path "" \
     --num_register_tokens $num_register_tokens \
-    --tokenizer detok_BB --aux_cls_token --pooling_cls_token \
+    --tokenizer detok_BB --aux_cls_token \
     --use_ema_tokenizer --collect_tokenizer_stats \
     --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl --overwrite_stats \
     --load_tokenizer_from work_dirs/$tokenizer_project/$tokenizer_exp_name/checkpoints/epoch_0049.pth \

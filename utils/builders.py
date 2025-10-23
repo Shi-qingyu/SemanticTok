@@ -144,6 +144,7 @@ def create_generation_model(args):
                 aux_cls_token=getattr(args, "aux_cls_token", False),
                 diff_cls_token=getattr(args, "diff_cls_token", False),
                 pooling_cls_token=getattr(args, "pooling_cls_token", False),
+                disable_kl=getattr(args, "disable_kl", False),
             )
         elif args.tokenizer in models.DeAE_models:
             tokenizer: nn.Module = models.DeAE_models[args.tokenizer](
@@ -316,6 +317,7 @@ def create_reconstruction_model(args):
             aux_cls_token=getattr(args, "aux_cls_token", False),
             pooling_cls_token=getattr(args, "pooling_cls_token", False),
             use_log_normal_noise=getattr(args, "use_log_normal_noise", False),
+            disable_kl=getattr(args, "disable_kl", False),
         )
     elif args.model in models.DeAE_models:
         model = models.DeAE_models[args.model](

@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 
@@ -9,7 +9,7 @@ pip install -r requirements.txt
 
 
 tokenizer_project=tokenizer_training
-tokenizer_exp_name=detokBB-reg4-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoisyalign0.5cls
+tokenizer_exp_name=detokBB-reg4-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoisyalign1.0cls
 num_register_tokens=4
 
 force_one_d_seq=0

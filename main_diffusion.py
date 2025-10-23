@@ -63,7 +63,7 @@ def main(args: argparse.Namespace) -> int:
         )
         # update tokenizer with computed statistics
         mean, std = result_dict["channel"]
-        if mean.ndim > 0 and hasattr(tokenizer, "encode_into_posteriors"):
+        if mean.ndim > 0 and hasattr(tokenizer, "encode_into_posteriors") and not tokenizer.disable_kl:
             n_chans = len(mean) // 2
             mean, std = mean[:n_chans], std[:n_chans]
         tokenizer.reset_stats(mean, std)
@@ -217,6 +217,7 @@ def get_args_parser():
     parser.add_argument("--aux_cls_token", action="store_true")
     parser.add_argument("--diff_cls_token", action="store_true")
     parser.add_argument("--pooling_cls_token", action="store_true")
+    parser.add_argument("--disable_kl", action="store_true")
 
     # tokenizer cache parameters
     parser.add_argument("--collect_tokenizer_stats", action="store_true")

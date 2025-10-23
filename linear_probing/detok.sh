@@ -2,7 +2,7 @@ batch_size=4096
 
 checkpoint_path=$1
 token_channels=${2:-16}
-pretrained_model_name_or_path=${3:-""}
+pretrained_model_name_or_path=${3:-"none"}
 num_register_tokens=0
 
 GPUS_PER_NODE=${GPUS_PER_NODE:-$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ')}

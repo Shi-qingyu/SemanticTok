@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 export NCCL_WATCHDOG_TIMEOUT=1800
 export NCCL_ASYNC_ERROR_HANDLING=1

@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 
@@ -24,7 +24,7 @@ reconstruction_weight=1.0
 perceptual_weight=1.0
 discriminator_weight=0.5
 kl_loss_weight=1e-6
-aux_loss_weight=0.5
+aux_loss_weight=0.1
 
 epochs=50
 discriminator_start_epoch=1

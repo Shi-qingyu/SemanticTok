@@ -1013,7 +1013,7 @@ def collect_tokenizer_stats(
         samples = batch["img"]
 
         # encode samples - handle different tokenizer interfaces
-        if hasattr(tokenizer, "encode_into_posteriors"):
+        if hasattr(tokenizer, "encode_into_posteriors") and not tokenizer.disable_kl:
             tokenizer_type = "vae"
             # e.g. shape: [B, 2C, H, W] or [B, seq_len, 2C]
             #########################################################
@@ -1026,7 +1026,7 @@ def collect_tokenizer_stats(
                 moments = moments.parameters
         elif hasattr(tokenizer, "encode"):
             tokenizer_type = "ae"
-            moments = tokenizer.encode(samples)[0]
+            moments = tokenizer.encode(samples)["z_latents"]
         else:
             tokenizer_type = "unknown"
             raise AttributeError("tokenizer must have 'encode_into_posteriors' or 'encode' method")

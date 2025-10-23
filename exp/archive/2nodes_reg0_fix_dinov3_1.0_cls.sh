@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 
@@ -16,7 +16,7 @@ token_channels=16
 patch_size=16
 pretrained_model_name_or_path=""
 num_register_tokens=0
-aux_model_type="dinov2"
+aux_model_type="dinov3"
 aux_dec_type="transformer"
 aux_input_type="noisy"
 aux_target="align"
@@ -34,7 +34,7 @@ mask_ratio_min=0.0
 mask_ratio_type="fix"
 vit_aux_model_size="tiny"
 
-exp_name="detokBB${pretrained_model_name_or_path}-reg${num_register_tokens}-ch${token_channels}-p${patch_size}-g${gamma}-m${mask_ratio_min}${mask_ratio}${mask_ratio_type}-aux${aux_model_type}${aux_dec_type}${aux_input_type}${aux_target}${aux_loss_weight}poolingcls"
+exp_name="detokBB${pretrained_model_name_or_path}-reg${num_register_tokens}-ch${token_channels}-p${patch_size}-g${gamma}-m${mask_ratio_min}${mask_ratio}${mask_ratio_type}-aux${aux_model_type}${aux_dec_type}${aux_input_type}${aux_target}${aux_loss_weight}cls"
 
 # add variable
 export MASTER_ADDR=${ARNOLD_WORKER_0_HOST}
@@ -69,7 +69,6 @@ torchrun \
   --mask_ratio_type "${mask_ratio_type}" \
   --vit_aux_model_size "${vit_aux_model_size}" \
   --aux_cls_token \
-  --pooling_cls_token \
   --reconstruction_weight "${reconstruction_weight}" \
   --perceptual_weight "${perceptual_weight}" \
   --discriminator_weight "${discriminator_weight}" \
