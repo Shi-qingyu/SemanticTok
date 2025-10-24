@@ -1,6 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
+export NCCL_TIMEOUT=3600
 export NCCL_WATCHDOG_TIMEOUT=1800
 export NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_DEBUG=INFO
