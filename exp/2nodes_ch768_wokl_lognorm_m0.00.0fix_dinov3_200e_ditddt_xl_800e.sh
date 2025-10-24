@@ -21,7 +21,7 @@ token_channels=768
 patch_size=16
 pretrained_model_name_or_path=""
 num_register_tokens=0
-aux_model_type="dinov2"
+aux_model_type="dinov3"
 aux_dec_type="transformer"
 aux_input_type="noisy"
 aux_target="align"
@@ -71,7 +71,6 @@ torchrun \
   --aux_target "${aux_target}" \
   --gamma "${gamma}" \
   --use_log_normal_noise \
-  --aux_cls_token \
   --disable_kl \
   --mask_ratio "${mask_ratio}" \
   --mask_ratio_min "${mask_ratio_min}" \
@@ -124,7 +123,6 @@ torchrun \
     --num_register_tokens $num_register_tokens \
     --token_channels $token_channels \
     --tokenizer $tokenizer --use_ema_tokenizer --collect_tokenizer_stats \
-    --aux_cls_token \
     --disable_kl \
     --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl \
     --load_tokenizer_from work_dirs/tokenizer_training/$tokenizer_exp_name/checkpoints/epoch_0199.pth \
