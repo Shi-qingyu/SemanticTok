@@ -63,7 +63,7 @@ def main(args: argparse.Namespace) -> int:
         )
         # update tokenizer with computed statistics
         mean, std = result_dict["channel"]
-        if mean.ndim > 0 and hasattr(tokenizer, "encode_into_posteriors"):
+        if mean.ndim > 0 and hasattr(tokenizer, "encode_into_posteriors") and not tokenizer.disable_kl:
             n_chans = len(mean) // 2
             mean, std = mean[:n_chans], std[:n_chans]
         tokenizer.reset_stats(mean, std)
@@ -217,6 +217,7 @@ def get_args_parser():
     parser.add_argument("--aux_cls_token", action="store_true")
     parser.add_argument("--diff_cls_token", action="store_true")
     parser.add_argument("--pooling_cls_token", action="store_true")
+    parser.add_argument("--disable_kl", action="store_true")
 
     # tokenizer cache parameters
     parser.add_argument("--collect_tokenizer_stats", action="store_true")
@@ -255,7 +256,7 @@ def get_args_parser():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--blr", type=float, default=1e-4)
     parser.add_argument("--min_lr", type=float, default=1e-6)
-    parser.add_argument("--lr_sched", type=str, default="constant", choices=["constant", "cosine", "linear"])
+    parser.add_argument("--lr_sched", type=str, default="linear", choices=["constant", "cosine", "linear"])
     parser.add_argument("--warmup_rate", type=float, default=0.25, help="warmup_ep = warmup_rate * total_ep")
     parser.add_argument("--ema_rate", default=0.9999, type=float)
     parser.add_argument("--weight_decay", type=float, default=0.02)

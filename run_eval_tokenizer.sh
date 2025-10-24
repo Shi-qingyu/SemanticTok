@@ -1,0 +1,40 @@
+project=tokenizer_training
+batch_size=64
+data_path=./data/imagenet/train
+model=detok_BB
+img_size=256
+token_channels=768
+patch_size=16
+pretrained_model_name_or_path=""
+num_register_tokens=0
+exp_name="detokBB-ch768-p16-g3.0lognorm-m0.00.0fix-auxdinov3transformernoisyalign1.0cls-200e-2025-10-17"
+load_from="work_dirs/tokenizer_training/${exp_name}/checkpoints/epoch_0199.pth"
+
+GPUS_PER_NODE=${GPUS_PER_NODE:-$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ')}
+GPUS_PER_NODE=${GPUS_PER_NODE:-1}
+NPROC_PER_NODE=${NPROC_PER_NODE:-$GPUS_PER_NODE}
+
+echo "[INFO] nnodes=${WORLD_SIZE}, node_rank=${RANK}, nproc_per_node=${NPROC_PER_NODE}, master=${MASTER_ADDR}:${MASTER_PORT}"
+global_batch=$(( batch_size * WORLD_SIZE * NPROC_PER_NODE ))
+echo "[INFO] per-GPU batch=${batch_size}, global batch=${global_batch}"
+
+torchrun \
+  --nnodes="${WORLD_SIZE:-1}" \
+  --nproc_per_node="${NPROC_PER_NODE}" \
+  --node_rank="${RANK:-0}" \
+  --master_addr="${MASTER_ADDR:-127.0.0.1}" \
+  --master_port="${MASTER_PORT:-29500}" \
+  main_reconstruction.py \
+  --project "${project}" --exp_name "${exp_name}" \
+  --batch_size "${batch_size}" --model "${model}" \
+  --token_channels "${token_channels}" \
+  --aux_cls_token \
+  --img_size "${img_size}" \
+  --patch_size "${patch_size}" \
+  --pretrained_model_name_or_path "${pretrained_model_name_or_path}" \
+  --num_register_tokens "${num_register_tokens}" \
+  --online_eval \
+  --load_from "${load_from}" \
+  --evaluate \
+  --eval_bsz 256 \
+  --data_path "${data_path}"

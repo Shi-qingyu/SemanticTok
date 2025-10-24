@@ -1,15 +1,11 @@
 tokenizer_project=tokenizer_training
-tokenizer=detok_BB
-pretrained_model_name_or_path=""
-tokenizer_exp_name=detokBB-ch768-p16-g3.0lognorm-m0.00.0fix-auxdinov3transformernoisyalign1.0cls-200e-2025-10-17
+tokenizer_exp_name=detokBB-ch768-p16-wokl-g3.0lognorm-m-0.10.7random-auxdinov3transformernoisyalign
 num_register_tokens=0
-token_channels=768
 
 force_one_d_seq=0
-exp_name=ditddt_b-${tokenizer_exp_name}
+exp_name=LightningDiT_base-${tokenizer_exp_name}
 
 project=gen_model_training
-model=DiTDDT_b
 batch_size=128
 epochs=100
 
@@ -30,18 +26,18 @@ torchrun \
     main_diffusion.py \
     --project $project --exp_name $exp_name --auto_resume \
     --batch_size $batch_size --epochs $epochs --use_aligned_schedule \
-    --pretrained_model_name_or_path "${pretrained_model_name_or_path}" \
-    --num_register_tokens $num_register_tokens \
-    --token_channels $token_channels \
-    --aux_cls_token \
-    --tokenizer $tokenizer --use_ema_tokenizer \
-    --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl --collect_tokenizer_stats \
-    --load_tokenizer_from work_dirs/tokenizer_training/$tokenizer_exp_name/checkpoints/epoch_0199.pth \
-    --model $model \
+    --pretrained_model_name_or_path "" \
+    --token_channels 16 \
     --disable_kl \
+    --num_register_tokens $num_register_tokens \
+    --tokenizer detok_BB --use_ema_tokenizer --collect_tokenizer_stats \
+    --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl \
+    --load_tokenizer_from work_dirs/tokenizer_training/$tokenizer_exp_name/checkpoints/epoch_0199.pth \
+    --model LightningDiT_base \
     --force_one_d_seq $force_one_d_seq \
-    --num_sampling_steps 250 --cfg 1.6 \
-    --cfg_list 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 \
+    --num_sampling_steps 250 --cfg 1.3 \
+    --cfg_list 1.6 \
     --online_eval --eval_freq 10 \
+    --evaluate \
     --vis_freq 50 --eval_bsz 256 \
     --data_path ./data/imagenet/train

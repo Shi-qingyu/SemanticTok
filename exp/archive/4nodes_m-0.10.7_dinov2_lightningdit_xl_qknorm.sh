@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 
@@ -13,10 +13,10 @@ tokenizer_exp_name=detokBB-ch16-g3.0-m0.7-auxdinov2
 num_register_tokens=0
 
 force_one_d_seq=0
-exp_name=lightningdit_xl-${tokenizer_exp_name}
+exp_name=lightningdit_xl-qknorm-${tokenizer_exp_name}-2025-10-15
 
 project=gen_model_training
-batch_size=64  # nnodes * ngpus * batch_size = 1024
+batch_size=32  # nnodes * ngpus * batch_size = 1024
 epochs=800
 
 # add variable
@@ -45,9 +45,10 @@ torchrun \
     --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl --overwrite_stats \
     --load_tokenizer_from work_dirs/$tokenizer_project/$tokenizer_exp_name/checkpoints/epoch_0199.pth \
     --model LightningDiT_xl \
+    --qk_norm \
     --force_one_d_seq $force_one_d_seq \
     --num_sampling_steps 250 --cfg 1.3 \
     --cfg_list 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 \
-    --online_eval --eval_freq 800 \
+    --eval_freq 800 \
     --vis_freq 50 --eval_bsz 256 \
     --data_path ./data/imagenet/train

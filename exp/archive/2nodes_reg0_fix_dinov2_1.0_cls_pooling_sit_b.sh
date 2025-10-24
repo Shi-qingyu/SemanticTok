@@ -1,7 +1,7 @@
 # add the requirement env
 sudo apt-get install ffmpeg libsm6 libxext6 tmux htop  -y
 
-export http_proxy=bj-rd-proxy.byted.org:3128  https_proxy=bj-rd-proxy.byted.org:3128  no_proxy=code.byted.org
+
 
 cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 
@@ -9,16 +9,15 @@ pip install -r requirements.txt
 
 
 tokenizer_project=tokenizer_training
-tokenizer_exp_name=detokBB-ch16-g3.0-m0.7-auxdinov2
+tokenizer_exp_name=detokBB-reg0-ch16-p16-g3.0-m0.00.0fix-auxdinov2transformernoisyalign1.0poolingcls
 num_register_tokens=0
 
 force_one_d_seq=0
-exp_name=sit_b-${tokenizer_exp_name}
+exp_name=sit_b-${tokenizer_exp_name}-2025-10-08
 
 project=gen_model_training
-batch_size=128  # nnodes * ngpus * batch_size = 1024
+batch_size=64  # nnodes * ngpus * batch_size = 1024
 epochs=100
-
 
 # add variable
 export MASTER_ADDR=${ARNOLD_WORKER_0_HOST}
@@ -42,13 +41,14 @@ torchrun \
     --batch_size $batch_size --epochs $epochs --use_aligned_schedule \
     --pretrained_model_name_or_path "" \
     --num_register_tokens $num_register_tokens \
-    --tokenizer detok_BB --use_ema_tokenizer --collect_tokenizer_stats \
-    --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl \
-    --load_tokenizer_from work_dirs/$tokenizer_project/$tokenizer_exp_name/checkpoints/epoch_0199.pth \
+    --tokenizer detok_BB --aux_cls_token --pooling_cls_token \
+    --use_ema_tokenizer --collect_tokenizer_stats \
+    --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl --overwrite_stats \
+    --load_tokenizer_from work_dirs/$tokenizer_project/$tokenizer_exp_name/checkpoints/epoch_0049.pth \
     --model SiT_base \
     --force_one_d_seq $force_one_d_seq \
     --num_sampling_steps 250 --cfg 1.3 \
     --cfg_list 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 \
-    --online_eval --eval_freq 10 \
+    --online_eval --eval_freq 100 \
     --vis_freq 50 --eval_bsz 256 \
     --data_path ./data/imagenet/train
