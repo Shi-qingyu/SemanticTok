@@ -965,9 +965,9 @@ class MLPDecoder(nn.Module):
         self.aux_embed_dim = aux_embed_dim
         
         self.mlp = nn.Sequential(
-            nn.Linear(self.token_channels, 4 * self.aux_embed_dim),
+            nn.Linear(self.token_channels, self.token_channels),
             nn.GELU(),
-            nn.Linear(4 * self.aux_embed_dim, self.aux_embed_dim),
+            nn.Linear(self.token_channels, self.aux_embed_dim),
         )
 
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
@@ -1334,12 +1334,12 @@ class DeTok(nn.Module):
         ids_keep = ret["ids_keep"]
         ids_masked = ret["ids_masked"]
 
-        if not self.disable_kl:
-            posteriors = self.to_posteriors(z)
-            z_latents = posteriors.sample() if sampling else posteriors.mean
-        else:
+        if self.disable_kl:
             posteriors = None
             z_latents = z
+        else:
+            posteriors = self.to_posteriors(z)
+            z_latents = posteriors.sample() if sampling else posteriors.mean
         
         # if isinstance(self.encoder, DualEncoder):
         #     if self.encoder.last_layer_feature:
@@ -1370,10 +1370,7 @@ class DeTok(nn.Module):
                 
             # noise_level_tensor = noise_level_tensor.expand(-1, n_tokens, chans)
             noise = torch.randn(bsz, n_tokens, chans, device=device) * self.gamma
-            if self.use_additive_noise:
-                z_latents = z_latents + noise_level_tensor * noise
-            else:
-                z_latents = (1 - noise_level_tensor) * z_latents + noise_level_tensor * noise
+            z_latents = (1 - noise_level_tensor) * z_latents + noise_level_tensor * noise
                 
             if self.aux_input_type == "noisy":
                 noise_aux = torch.randn_like(z_latents_aux) * self.gamma
