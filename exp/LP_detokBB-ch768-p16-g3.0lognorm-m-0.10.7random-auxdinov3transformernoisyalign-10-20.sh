@@ -14,7 +14,7 @@ export NNODES=1
 export NODE_RANK=0
 
 export PYTHONPATH=.
-torchrun --nproc_per_node=${NPROC_PER_NODE} --nnodes=${NNODES} --node_rank=${NODE_RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
+torchrun --nproc_per_node=${NPROC_PER_NODE}  --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} \
     linear_probing/detok.py \
     --model detok_BB \
     --last_layer_feature \
