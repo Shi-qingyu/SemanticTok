@@ -965,9 +965,9 @@ class MLPDecoder(nn.Module):
         self.aux_embed_dim = aux_embed_dim
         
         self.mlp = nn.Sequential(
-            nn.Linear(self.token_channels, self.token_channels),
+            nn.Linear(self.token_channels, self.token_channels * 4),
             nn.GELU(),
-            nn.Linear(self.token_channels, self.aux_embed_dim),
+            nn.Linear(self.token_channels * 4, self.aux_embed_dim),
         )
 
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6

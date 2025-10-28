@@ -382,9 +382,9 @@ class AuxLoss(nn.Module):
 
     def forward(self, aux_feature, pred_aux_feature):            
         if self.aux_loss_type == "l2":
-            aux_loss = F.mse_loss(aux_feature, pred_aux_feature, reduction="mean")
+            aux_loss = F.mse_loss(aux_feature.clone().detach().to(pred_aux_feature.dtype), pred_aux_feature, reduction="mean")
         elif self.aux_loss_type == "l1":
-            aux_loss = F.l1_loss(aux_feature, pred_aux_feature, reduction="mean")
+            aux_loss = F.l1_loss(aux_feature.clone().detach(), pred_aux_feature, reduction="mean")
         elif self.aux_loss_type == "cosine":
             aux_feature = F.normalize(aux_feature, dim=-1)
             pred_aux_feature = F.normalize(pred_aux_feature, dim=-1)
