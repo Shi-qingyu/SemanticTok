@@ -36,7 +36,7 @@ mask_ratio_min=-0.1
 mask_ratio_type="random"
 vit_aux_model_size="tiny"
 
-exp_name="detokBB${pretrained_model_name_or_path}-ch${token_channels}-p${patch_size}-g${gamma}lognorm-m${mask_ratio_min}${mask_ratio}${mask_ratio_type}-aux${aux_model_type}${aux_dec_type}${aux_input_type}${aux_target}-10-20"
+exp_name="detokBB${pretrained_model_name_or_path}-ch${token_channels}-p${patch_size}-g${gamma}lognorm-m${mask_ratio_min}${mask_ratio}${mask_ratio_type}-aux${aux_model_type}${aux_dec_type}${aux_input_type}${aux_target}${aux_loss_weight}-10-29"
 
 # add variable
 export MASTER_ADDR=${ARNOLD_WORKER_0_HOST}
@@ -78,6 +78,7 @@ torchrun \
   --kl_loss_weight "${kl_loss_weight}" \
   --aux_loss_weight "${aux_loss_weight}" \
   --epochs "${epochs}" --discriminator_start_epoch "${discriminator_start_epoch}" \
+  --keep_eval_folder \
   --data_path "${data_path}"
 
 
@@ -92,7 +93,7 @@ exp_name=ditddt_xl-${tokenizer_exp_name}
 project=gen_model_training
 model=DiTDDT_xl
 batch_size=32  # nnodes * ngpus * batch_size = 1024
-epochs=800
+epochs=80
 
 # add variable
 export MASTER_ADDR=${ARNOLD_WORKER_0_HOST}
