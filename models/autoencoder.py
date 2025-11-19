@@ -628,7 +628,7 @@ class AutoencoderKL(nn.Module):
 
 
 class DiffusersAutoencoderKL(nn.Module):
-    def __init__(self, name=None, scale_factor=0.18215):
+    def __init__(self, name=None, scale_factor=0.18215, shift_factor=0.0):
         super().__init__()
         self.name = name if name is not None else "autoencoder"
         if name == "sdvae":
@@ -639,17 +639,42 @@ class DiffusersAutoencoderKL(nn.Module):
             self.vae: DiffusersAutoencoderKLBackbone = DiffusersAutoencoderKLBackbone.from_pretrained(
                 f"zelaki/eq-vae-ema"
             )
+        elif name == "sd3vae":
+            local_dir = "./work_dirs/tokenizer_training/sd3vae"
+            
+            if os.path.exists(local_dir):
+                self.vae: DiffusersAutoencoderKLBackbone = DiffusersAutoencoderKLBackbone.from_pretrained(
+                    local_dir,
+                    subfolder="vae",
+                )
+            else:
+                self.vae: DiffusersAutoencoderKLBackbone = DiffusersAutoencoderKLBackbone.from_pretrained(
+                    "stabilityai/stable-diffusion-3-medium-diffusers",
+                    subfolder="vae",
+                )
+        elif name == "fluxvae":
+            local_dir = "../FLUX.1-dev"
+            if os.path.exists(local_dir):
+                self.vae: DiffusersAutoencoderKLBackbone = DiffusersAutoencoderKLBackbone.from_pretrained(
+                    local_dir,
+                    subfolder="vae",
+                )
+        else:
+            raise ValueError(f"Unknown VAE model: {name}")
+        
         self.vae.eval()
         self.scale_factor = scale_factor
-
+        self.shift_factor = shift_factor
+        logger.info(f"[DiffusersAutoencoderKL] {self.name} scale_factor: {self.scale_factor}, shift_factor: {self.shift_factor}")
+        
     def forward(self):
         pass
 
     def denormalize_z(self, z):
-        return z / self.scale_factor
+        return z / self.scale_factor + self.shift_factor
 
     def normalize_z(self, z):
-        return z * self.scale_factor
+        return (z - self.shift_factor) * self.scale_factor
 
     def tokenize(self, x, sampling=False):
         sample = self.vae.encode(x).latent_dist
@@ -804,7 +829,23 @@ def eq_vae(load_ckpt=True, load_from=None, gamma=0.0) -> DiffusersAutoencoderKL:
     return DiffusersAutoencoderKL(name="eqvae", scale_factor=0.18215)
 
 
-VAE_models = {"marvae": mar_vae, "vavae": va_vae, "sdvae": sd_vae, "eqvae": eq_vae}
+def sd3_vae(load_ckpt=True, load_from=None, gamma=0.0) -> DiffusersAutoencoderKL:
+    return DiffusersAutoencoderKL(name="sd3vae", scale_factor=1.5305, shift_factor=0.0609)
+
+
+def flux_vae(load_ckpt=True, load_from=None, gamma=0.0) -> DiffusersAutoencoderKL:
+    return DiffusersAutoencoderKL(name="fluxvae", scale_factor=0.3611, shift_factor=0.1159)
+
+
+VAE_models = {
+    "marvae": mar_vae, 
+    "vavae": va_vae, 
+    "sdvae": sd_vae, 
+    "eqvae": eq_vae,
+    "sd3vae": sd3_vae,
+    "fluxvae": flux_vae,
+}
+
 
 AuxiliaryDecoder_models = {
     "transformer": TransformerDecoder,

@@ -283,6 +283,10 @@ class PerceptualLoss(torch.nn.Module):
             logger.info(
                 f"loss weights - lpips: {self.loss_weight_lpips}, convnext: {self.loss_weight_convnext}"
             )
+        else:
+            loss_config = model_name.split("-")[-1]
+            self.loss_weight_lpips = float(loss_config)
+            logger.info(f"loss weight - lpips: {self.loss_weight_lpips}")
 
         self.register_buffer("imagenet_mean", Tensor(_IMAGENET_MEAN)[None, :, None, None])
         self.register_buffer("imagenet_std", Tensor(_IMAGENET_STD)[None, :, None, None])

@@ -1369,8 +1369,8 @@ class DeTok(nn.Module):
             device = z_latents.device
             bsz, n_tokens, chans = z_latents.shape
             noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
-
-            # noise_level_tensor = noise_level_tensor.expand(-1, n_tokens, chans)
+            noise_level_tensor = noise_level_tensor.expand(-1, n_tokens, chans)
+            
             noise = torch.randn(bsz, n_tokens, chans, device=device) * self.gamma
             z_latents = (1 - noise_level_tensor) * z_latents + noise_level_tensor * noise
 

@@ -25,6 +25,7 @@ import utils.distributed as dist
 import utils.misc as misc
 from utils.logger import MetricLogger, SmoothedValue, setup_logging, setup_wandb, WandbLogger
 from utils.losses import ReconstructionLoss
+from utils.builders import create_auto_guidance_model
 
 tqdm = partial(tqdm, dynamic_ncols=True)
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -535,7 +536,7 @@ def generate_images(
         labels = torch.tensor(labels, dtype=torch.long).to("cuda")
     generator = generator.eval().to("cuda")
     with torch.autocast("cuda", dtype=torch.bfloat16):
-        generated = generator.generate(n_samples=len(labels), cfg=cfg, labels=labels, args=args)
+        generated = generator.generate(n_samples=len(labels), labels=labels, cfg=cfg, args=args)
         if tokenizer is not None:
             generated = tokenizer.detokenize(generated)
     return generated

@@ -157,6 +157,7 @@ def create_generation_model(args):
             )
         else:
             raise ValueError(f"Unsupported tokenizer {args.tokenizer}")
+        
         if args.load_tokenizer_from is not None:
             logger.info(f"[Tokenizer] Loading tokenizer from: {args.load_tokenizer_from}")
             weights = torch.load(args.load_tokenizer_from, weights_only=False, map_location="cpu")
@@ -225,6 +226,7 @@ def create_generation_model(args):
         model = models.DiTDDT_models[args.model](
             img_size=args.img_size,
             token_channels=args.token_channels,
+            num_sampling_steps=args.num_sampling_steps,
         )
     elif args.model in models.ARDiff_models:
         model = models.ARDiff_models[args.model](
@@ -343,6 +345,30 @@ def create_reconstruction_model(args):
     ema = models.SimpleEMAModel(model, decay=getattr(args, "ema_rate", 0.999))
     return model, ema
 
+
+def create_auto_guidance_model(args):
+    logger.info("Creating auto guidance model.")
+    if args.auto_guidance_model in models.DiT_models:
+        model = models.DiT_models[args.auto_guidance_model](
+            img_size=args.img_size,
+            token_channels=args.token_channels,
+        )
+    elif args.auto_guidance_model in models.DiTDDT_models:
+        model = models.DiTDDT_models[args.auto_guidance_model](
+            img_size=args.img_size,
+            token_channels=args.token_channels,
+        )
+    else:
+        raise ValueError(f"Unsupported auto guidance model {args.auto_guidance_model}")
+
+    checkpoint = torch.load(args.load_auto_guidance_from, weights_only=False, map_location="cpu")
+    msg = model.load_state_dict(checkpoint["model_ema"], strict=False)
+    logger.info(f"Auto Guidance Model Loaded: {msg}")
+
+    model.cuda()
+    logger.info("====Auto Guidance Model=====")
+    logger.info(model)
+    return model
 
 def create_optimizer_and_scaler(args, model, print_trainable_params=False):
     logger.info("creating optimizers")

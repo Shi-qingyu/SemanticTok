@@ -242,6 +242,11 @@ class DiTwDDTHead(nn.Module):
         x = self.unpatchify(x)
         return x
 
+    def forward(self, x, y):
+        """forward pass for training."""
+        loss_dict = self.transport.training_losses(self.net, x, dict(y=y))
+        return loss_dict["loss"].mean()
+
     def forward_with_cfg(self, x, t, y, cfg_scale, cfg_interval=(0, 1)):
         """
         Forward pass of LightningDiT, but also batches the unconditional forward pass for classifier-free guidance.
@@ -266,11 +271,6 @@ class DiTwDDTHead(nn.Module):
         )
         eps = torch.cat([half_eps, half_eps], dim=0)
         return torch.cat([eps, rest], dim=1)
-
-    def forward(self, x, y):
-        """forward pass for training."""
-        loss_dict = self.transport.training_losses(self.net, x, dict(y=y))
-        return loss_dict["loss"].mean()
 
     def forward_with_autoguidance(self, x, t, y, cfg_scale, additional_model_forward, cfg_interval=(0, 1)):
         """
@@ -304,24 +304,37 @@ class DiTwDDTHead(nn.Module):
 
         # setup classifier-free guidance
         if cfg > 1.0:
-            z = torch.cat([z, z], 0)
-            y_null = torch.tensor([self.num_classes] * n_samples, device=device)
-            labels = torch.cat([labels, y_null], 0)
-            model_kwargs = dict(y=labels, cfg_scale=cfg, cfg_interval=(0, 1.0))
-            model_fn = self.forward_with_cfg
+            if args.use_auto_guidance:
+                model_kwargs = dict(
+                    y=labels, 
+                    cfg_scale=cfg, 
+                    additional_model_forward=args.additional_model_forward, 
+                    cfg_interval=(0, 1)
+                )
+                model_fn = self.forward_with_autoguidance
+            else:
+                z = torch.cat([z, z], 0)
+                y_null = torch.tensor([self.num_classes] * n_samples, device=device)
+                labels = torch.cat([labels, y_null], 0)
+                model_kwargs = dict(
+                    y=labels, 
+                    cfg_scale=cfg, 
+                    cfg_interval=(0, 1)
+                )
+                model_fn = self.forward_with_cfg
         else:
             model_kwargs = dict(y=labels)
             model_fn = self.net
 
         # generate samples
         samples = self.sample_fn(z, model_fn, **model_kwargs)[-1]
-        if cfg > 1.0:
+        if cfg > 1.0 and not args.use_auto_guidance:
             samples, _ = samples.chunk(2, dim=0)  # remove null class samples
         return samples
 
 
 def DiTwDDTHead_s(**kwargs):
-    logger.info(f"DiTwDDTHead_b kwargs: {kwargs}")
+    logger.info(f"DiTwDDTHead_s kwargs: {kwargs}")
     return DiTwDDTHead(
         img_size=kwargs.get("img_size", 256),
         patch_size=kwargs.get("patch_size", [1, 1]),
@@ -330,6 +343,56 @@ def DiTwDDTHead_s(**kwargs):
         hidden_size=kwargs.get("hidden_size", [384, 2048]),
         depth=kwargs.get("depth", [12, 2]),
         num_heads=kwargs.get("num_heads", [6, 16]),
+        mlp_ratio=kwargs.get("mlp_ratio", 4.0),
+        label_dropout_prob=kwargs.get("label_dropout_prob", 0.1),
+        num_classes=kwargs.get("num_classes", 1000),
+        use_qknorm=kwargs.get("use_qknorm", False),
+        use_swiglu=kwargs.get("use_swiglu", True),
+        use_rope=kwargs.get("use_rope", True),
+        use_rmsnorm=kwargs.get("use_rmsnorm", True),
+        wo_shift=kwargs.get("wo_shift", False),
+        use_pos_embed=kwargs.get("use_pos_embed", True),
+        sampling_method=kwargs.get("sampling_method", "euler"),
+        num_sampling_steps=kwargs.get("num_sampling_steps", 50),
+        force_one_d_seq=kwargs.get("force_one_d_seq", 0),
+    )
+
+
+def DiTwDDTHead_b(**kwargs):
+    logger.info(f"DiTwDDTHead_b kwargs: {kwargs}")
+    return DiTwDDTHead(
+        img_size=kwargs.get("img_size", 256),
+        patch_size=kwargs.get("patch_size", [1, 1]),
+        tokenizer_patch_size=kwargs.get("tokenizer_patch_size", 16),
+        token_channels=kwargs.get("token_channels", 128),
+        hidden_size=kwargs.get("hidden_size", [768, 2048]),
+        depth=kwargs.get("depth", [12, 2]),
+        num_heads=kwargs.get("num_heads", [12, 16]),
+        mlp_ratio=kwargs.get("mlp_ratio", 4.0),
+        label_dropout_prob=kwargs.get("label_dropout_prob", 0.1),
+        num_classes=kwargs.get("num_classes", 1000),
+        use_qknorm=kwargs.get("use_qknorm", False),
+        use_swiglu=kwargs.get("use_swiglu", True),
+        use_rope=kwargs.get("use_rope", True),
+        use_rmsnorm=kwargs.get("use_rmsnorm", True),
+        wo_shift=kwargs.get("wo_shift", False),
+        use_pos_embed=kwargs.get("use_pos_embed", True),
+        sampling_method=kwargs.get("sampling_method", "euler"),
+        num_sampling_steps=kwargs.get("num_sampling_steps", 50),
+        force_one_d_seq=kwargs.get("force_one_d_seq", 0),
+    )
+
+
+def DiTwDDTHead_l(**kwargs):
+    logger.info(f"DiTwDDTHead_l kwargs: {kwargs}")
+    return DiTwDDTHead(
+        img_size=kwargs.get("img_size", 256),
+        patch_size=kwargs.get("patch_size", [1, 1]),
+        tokenizer_patch_size=kwargs.get("tokenizer_patch_size", 16),
+        token_channels=kwargs.get("token_channels", 128),
+        hidden_size=kwargs.get("hidden_size", [1024, 2048]),
+        depth=kwargs.get("depth", [24, 2]),
+        num_heads=kwargs.get("num_heads", [16, 16]),
         mlp_ratio=kwargs.get("mlp_ratio", 4.0),
         label_dropout_prob=kwargs.get("label_dropout_prob", 0.1),
         num_classes=kwargs.get("num_classes", 1000),
@@ -372,5 +435,7 @@ def DiTwDDTHead_xl(**kwargs):
 
 DiTDDT_models = {
     "DiTDDT_s": DiTwDDTHead_s,
+    "DiTDDT_b": DiTwDDTHead_b,
+    "DiTDDT_l": DiTwDDTHead_l,
     "DiTDDT_xl": DiTwDDTHead_xl,
 }
