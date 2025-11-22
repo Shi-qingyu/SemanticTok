@@ -96,7 +96,7 @@ exp_name=ditddt_xl-${tokenizer_exp_name}
 
 project=gen_model_training
 model=DiTDDT_xl
-batch_size=8  # nnodes * ngpus * batch_size = 1024
+batch_size=16  # nnodes * ngpus * batch_size = 1024
 epochs=80
 
 # add variable
