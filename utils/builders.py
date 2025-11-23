@@ -313,16 +313,12 @@ def create_reconstruction_model(args):
             aux_dec_type=getattr(args, "aux_dec_type", "transformer"),
             aux_input_type=getattr(args, "aux_input_type", "noisy"),
             aux_target=getattr(args, "aux_target", "reconstruction"),
-            use_adaptive_channels=getattr(args, "use_adaptive_channels", False),
             last_layer_feature=getattr(args, "last_layer_feature", False),
             vit_aux_model_size=getattr(args, "vit_aux_model_size", "tiny"),
-            aux_cls_token=getattr(args, "aux_cls_token", False),
-            pooling_cls_token=getattr(args, "pooling_cls_token", False),
+            cls_token_type=getattr(args, "cls_token_type", "none"),
             noise_schedule=getattr(args, "noise_schedule", "uniform"),
             disable_kl=getattr(args, "disable_kl", False),
-            aux_decoder_only=getattr(args, "aux_decoder_only", False),
-            channel_drop=getattr(args, "channel_drop", 0.0),
-            low_rank_space=getattr(args, "low_rank_space", False),
+            use_qknorm=getattr(args, "use_qknorm", False),
         )
     elif args.model in models.DeAE_models:
         model = models.DeAE_models[args.model](

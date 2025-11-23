@@ -144,18 +144,26 @@ class SwiGLUFFN(nn.Module):
 class Attention(nn.Module):
     """multi-head attention with rotary position embedding."""
 
-    def __init__(self, dim: int, num_heads: int = 8) -> None:
+    def __init__(self, dim: int, num_heads: int = 8, use_qknorm: bool = False) -> None:
         super().__init__()
         assert dim % num_heads == 0, f"dim % num_heads !=0, got {dim} and {num_heads}"
         self.head_dim = dim // num_heads
         self.num_heads = num_heads
         self.qkv = nn.Linear(dim, dim * 3)
         self.proj = nn.Linear(dim, dim)
+        self.use_qknorm = use_qknorm
+        if self.use_qknorm:
+            self.q_norm = nn.RMSNorm(self.head_dim)
+            self.k_norm = nn.RMSNorm(self.head_dim)
+        else:
+            self.q_norm = nn.Identity()
+            self.k_norm = nn.Identity()
 
     def forward(self, x: Tensor, rope: Tensor) -> Tensor:
         bsz, n_ctx, ch = x.shape
         qkv = self.qkv(x)
         q, k, v = rearrange(qkv, "b n (qkv h d) -> qkv b h n d", qkv=3, h=self.num_heads).unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
         q, k = apply_rotary_emb(q, rope), apply_rotary_emb(k, rope)
         x = F.scaled_dot_product_attention(q, k, v)
         return self.proj(x.transpose(1, 2).reshape(bsz, n_ctx, ch))
@@ -169,11 +177,12 @@ class Block(nn.Module):
         dim: int,
         num_heads: int,
         mlp_ratio: float = 4.0,
-        norm_layer=partial(nn.RMSNorm, eps=1e-6),
+        norm_layer: nn.Module = partial(nn.RMSNorm, eps=1e-6),
+        use_qknorm: bool = False,
     ) -> None:
         super().__init__()
         self.norm1, self.norm2 = norm_layer(dim), norm_layer(dim)
-        self.attn = Attention(dim, num_heads)
+        self.attn = Attention(dim, num_heads, use_qknorm=use_qknorm)
         self.mlp = SwiGLUFFN(dim, int(2 / 3 * dim * mlp_ratio))
 
     def forward(self, x: Tensor, rope: Tensor = None) -> Tensor:
@@ -201,11 +210,11 @@ class Encoder(nn.Module):
         random_mask_ratio: bool = True,
         use_skip_connection: bool = False,
         last_layer_feature: bool = False,
-        aux_cls_token: bool = False,
-        pooling_cls_token: bool = False,
+        cls_token_type: str = "none",
         diff_cls_token: bool = False,
         num_register_tokens: int = 0,
         disable_kl: bool = False,
+        use_qknorm: bool = False,
     ) -> None:
         super().__init__()
         self.img_size = img_size
@@ -224,12 +233,12 @@ class Encoder(nn.Module):
         self.seq_len = self.grid_size ** 2
         self.use_skip_connection = use_skip_connection
         self.last_layer_feature = last_layer_feature
-        self.aux_cls_token = aux_cls_token
-        self.pooling_cls_token = pooling_cls_token
+        self.cls_token_type = cls_token_type
         self.diff_cls_token = diff_cls_token
         self.num_register_tokens = num_register_tokens
         self.disable_kl = disable_kl
-
+        self.use_qknorm = use_qknorm
+        
         size_dict = SIZE_DICT[self.model_size]
         num_layers, num_heads, width = size_dict["layers"], size_dict["heads"], size_dict["width"]
         self.width = width
@@ -242,13 +251,11 @@ class Encoder(nn.Module):
 
         # learnable embeddings
         scale = width ** -0.5
-        if self.aux_cls_token and not self.pooling_cls_token:
+        if self.cls_token_type == "learnable":
+            self.aux_cls_token_embedding = nn.Parameter(scale * torch.randn(1, 1, width))
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + 1 + 256, width))
         else:
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens + 256, width))
-
-        if self.aux_cls_token and not self.pooling_cls_token:
-            self.aux_cls_token_embedding = nn.Parameter(scale * torch.randn(1, 1, width))
             
         if self.num_register_tokens > 0:
             self.register_token_embedding = nn.Parameter(scale * torch.randn(1, self.num_register_tokens, width))
@@ -257,14 +264,14 @@ class Encoder(nn.Module):
         norm_layer = partial(nn.RMSNorm, eps=1e-6)
         self.ln_pre = norm_layer(width)
         self.transformer = nn.ModuleList(
-            [Block(dim=width, num_heads=num_heads, norm_layer=norm_layer) for _ in range(num_layers)]
+            [Block(dim=width, num_heads=num_heads, norm_layer=norm_layer, use_qknorm=self.use_qknorm) for _ in range(num_layers)]
         )
         self.ln_post = norm_layer(width)
         self.latent_head = nn.Linear(width, self.token_channels)
 
         # rotary position embedding
         head_dim = self.transformer[0].attn.head_dim
-        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size, add_cls=self.aux_cls_token and not self.pooling_cls_token, n_register=self.num_register_tokens).unsqueeze(0)
+        rope_tensor = get_rope_tensor(head_dim, self.grid_size, self.grid_size, add_cls=self.cls_token_type == "learnable", n_register=self.num_register_tokens).unsqueeze(0)
         self.register_buffer("rope_tensor", rope_tensor, persistent=False)
 
         params_M = sum(p.numel() for p in self.parameters() if p.requires_grad) / 1e6
@@ -351,7 +358,7 @@ class Encoder(nn.Module):
         else:
             x = self.patch_embed(x)
         
-        if self.aux_cls_token and not self.pooling_cls_token:
+        if self.cls_token_type == "learnable":
             x = torch.cat([self.aux_cls_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
         if self.num_register_tokens > 0:
             x = torch.cat([self.register_token_embedding.expand(x.shape[0], -1, -1), x], dim=1)
@@ -371,34 +378,18 @@ class Encoder(nn.Module):
         for block in self.transformer:
             x = block(x, rope)
         
-        if self.last_layer_feature:
-            z_aux = x
-            x = self.ln_post(x)
-            z = self.latent_head(x)    # [bsz, seq_len, token_channels]
-        else:
-            x = self.ln_post(x)
-            z = self.latent_head(x)
-            z_aux = z
+        x = self.ln_post(x)
+        z = self.latent_head(x)
         
         if self.num_register_tokens > 0:
             z = z[:, self.num_register_tokens:]
-            z_aux = z_aux[:, self.num_register_tokens:]
 
-        if self.aux_cls_token:
-            if self.pooling_cls_token:
-                z_cls = z.mean(1).unsqueeze(1)
-                z_aux_cls = z_aux.mean(1).unsqueeze(1)
-                z_aux = torch.cat([z_aux_cls, z_aux], dim=1)
-            else:
-                z_cls = z[:, 0].unsqueeze(1)
-                z = z[:, 1:]
-        
-        if self.diff_cls_token:
+        if self.cls_token_type == "pooling":
+            z_cls = z.mean(1).unsqueeze(1)
             z = torch.cat([z_cls, z], dim=1)
 
         ret = dict(
-            z=z,    # [bsz, seq_len + 1, dim] if diff_cls_token, [bsz, seq_len, dim] otherwise
-            z_aux=z_aux,
+            z=z,    # [bsz, seq_len + 1, dim] if cls_token is not none, [bsz, seq_len, dim] otherwise
             ids_restore=ids_restore,
             ids_keep=ids_keep,
             ids_masked=ids_masked,
@@ -549,7 +540,7 @@ class DualEncoder(nn.Module):
         return ret
     
     
-class PostMaskEncoder(nn.Module):
+class LatentMaskEncoder(nn.Module):
     """vision Transformer encoder with masked autoencoding capability."""
 
     def __init__(
@@ -753,6 +744,7 @@ class Decoder(nn.Module):
         diff_cls_token: bool = False,
         num_register_tokens: int = 0,
         low_rank_space: bool = False,
+        use_qknorm: bool = False,
     ) -> None:
         super().__init__()
         self.img_size = img_size
@@ -764,7 +756,8 @@ class Decoder(nn.Module):
         self.num_register_tokens = num_register_tokens
         self.diff_cls_token = diff_cls_token
         self.low_rank_space = low_rank_space
-
+        self.use_qknorm = use_qknorm
+        
         params = SIZE_DICT[self.model_size]
         num_layers, num_heads, width = params["layers"], params["heads"], params["width"]
 
@@ -789,7 +782,7 @@ class Decoder(nn.Module):
         norm_layer = partial(nn.RMSNorm, eps=1e-6)
         self.ln_pre = norm_layer(width)
         self.transformer = nn.ModuleList(
-            [Block(dim=width, num_heads=num_heads, norm_layer=norm_layer) for _ in range(num_layers)]
+            [Block(dim=width, num_heads=num_heads, norm_layer=norm_layer, use_qknorm=self.use_qknorm) for _ in range(num_layers)]
         )
         self.ln_post = norm_layer(width)
 
@@ -874,7 +867,6 @@ class TransformerDecoder(nn.Module):
         token_channels: int = 16,
         aux_embed_dim: int = 1024,
         aux_cls_token: bool = False,
-        use_adaptive_channels: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -891,7 +883,6 @@ class TransformerDecoder(nn.Module):
         self.token_channels = token_channels
         self.aux_embed_dim = aux_embed_dim
         self.aux_cls_token = aux_cls_token
-        self.use_adaptive_channels = use_adaptive_channels
         
         # learnable embeddings
         scale = width ** -0.5
@@ -901,14 +892,7 @@ class TransformerDecoder(nn.Module):
             self.positional_embedding = nn.Parameter(scale * torch.randn(1, self.seq_len, width))
         
         # token embedding
-        if self.use_adaptive_channels:
-            self.token_embedding = nn.Sequential(
-                nn.Linear(self.token_channels, 16),
-                nn.SiLU(),
-                nn.Linear(16, width),
-            )
-        else:
-            self.token_embedding = nn.Linear(self.token_channels, width)
+        self.token_embedding = nn.Linear(self.token_channels, width)
         
         # mask embedding
         self.mask_embedding = nn.Parameter(torch.zeros(1, 1, width))
@@ -1004,18 +988,15 @@ class DeTok(nn.Module):
         img_size: int = 256,
         patch_size: int = 16,
         vit_enc_model_size: str = "small",
-        pretrained_model_name_or_path: str = "",
+        encoder_type: str = "default",
         frozen_dinov3: bool = True,
         num_register_tokens: int = 0,
         vit_dec_model_size: str = "base",
         vit_aux_model_size: str = "tiny",
         token_channels: int = 16,
-        use_adaptive_channels: bool = False,
         last_layer_feature: bool = False,
-        vf_model_type: str = "",
         aux_model_type: str = "",
-        aux_cls_token: bool = False,
-        pooling_cls_token: bool = False,
+        cls_token_type: str = "none",
         diff_cls_token: bool = False,
         aux_dec_type: str = "transformer",
         aux_input_type: str = "noisy",
@@ -1031,6 +1012,7 @@ class DeTok(nn.Module):
         aux_decoder_only: bool = False,
         channel_drop: float = 0.0,
         low_rank_space: bool = False,
+        use_qknorm: bool = False,
         # normalization parameters used for generative model training
         mean=0.0,
         std=1.0,
@@ -1039,17 +1021,20 @@ class DeTok(nn.Module):
     ) -> None:
         super().__init__()
 
+        if len(kwargs) > 0:
+            logger.warning(f"Unknown arguments: {kwargs}")
+            
         # initialize encoder and decoder
-        if "dinov3" in pretrained_model_name_or_path:
+        if encoder_type == "dinov3":
             self.encoder = DINOv3Encoder(
-                pretrained_model_name_or_path=pretrained_model_name_or_path,
+                pretrained_model_name_or_path="facebook/dinov3-vitb16-pretrain-lvd1689m",
                 frozen_dinov3=frozen_dinov3,
                 img_size=img_size,
                 token_channels=token_channels,
                 num_register_tokens=num_register_tokens,
             )
-        elif "postmask" in pretrained_model_name_or_path:
-            self.encoder = PostMaskEncoder(
+        elif encoder_type == "latentmask":
+            self.encoder = LatentMaskEncoder(
                 img_size=img_size,
                 patch_size=patch_size,
                 model_size=vit_enc_model_size,
@@ -1058,7 +1043,7 @@ class DeTok(nn.Module):
                 mask_ratio_min=mask_ratio_min,
                 random_mask_ratio=mask_ratio_type.lower() == "random",
             )
-        elif "dual" in pretrained_model_name_or_path:
+        elif encoder_type == "dual":
             self.encoder = DualEncoder(
                 img_size=img_size,
                 patch_size=patch_size,
@@ -1080,25 +1065,23 @@ class DeTok(nn.Module):
                 random_mask_ratio=mask_ratio_type.lower() == "random",
                 use_skip_connection=use_skip_connection,
                 last_layer_feature=last_layer_feature,
-                aux_cls_token=aux_cls_token,
-                pooling_cls_token=pooling_cls_token,
+                cls_token_type=cls_token_type,
                 diff_cls_token=diff_cls_token,
                 num_register_tokens=0,
                 disable_kl=disable_kl,
+                use_qknorm=use_qknorm,
             )
             
-        if not aux_decoder_only:
-            self.decoder = Decoder(
-                img_size=img_size,
-                patch_size=patch_size,
-                model_size=vit_dec_model_size,
-                token_channels=token_channels,
-                diff_cls_token=diff_cls_token,
-                num_register_tokens=0,
-                low_rank_space=low_rank_space,
-            )
-        else:
-            self.decoder = None
+        self.decoder = Decoder(
+            img_size=img_size,
+            patch_size=patch_size,
+            model_size=vit_dec_model_size,
+            token_channels=token_channels,
+            diff_cls_token=diff_cls_token,
+            num_register_tokens=0,
+            low_rank_space=low_rank_space,
+            use_qknorm=use_qknorm,
+        )
 
         # model configuration
         self.seq_h = img_size // patch_size
@@ -1108,37 +1091,21 @@ class DeTok(nn.Module):
         self.use_additive_noise = use_additive_noise
         self.gamma = gamma
         self.scale_factor = scale_factor
-        self.vf_model_type = vf_model_type
         self.aux_model_type = aux_model_type
-        self.use_adaptive_channels = use_adaptive_channels
         self.aux_input_type = aux_input_type
         self.aux_target = aux_target
-        self.aux_cls_token = aux_cls_token
-        self.pooling_cls_token = pooling_cls_token
+        self.cls_token_type = cls_token_type
         self.diff_cls_token = diff_cls_token
         self.noise_schedule = noise_schedule
         self.disable_kl = disable_kl
         self.aux_decoder_only = aux_decoder_only
         self.channel_drop = channel_drop
+        self.use_qknorm = use_qknorm
         
         self.timestep_shift = sqrt(self.seq_h * self.seq_w * self.token_channels / 4096)
         
         # initialize weights
         self.apply(self._init_weights)
-
-        # initialize vf loss
-        self.use_vf = False
-        if vf_model_type != "":
-            self.use_vf = True
-            if vf_model_type == "dinov2":
-                self.foundation_model = create_foundation_model(vf_model_type)[0]
-                self.foundation_model.eval()
-                self.foundation_model.requires_grad_(False)
-
-                self.vf_feature_dim = self.foundation_model.num_features
-                self.linear_proj = nn.Linear(int(self.vf_feature_dim), self.token_channels)
-            else:
-                raise ValueError(f"Unknown foundation model type: {vf_model_type}")
         
         self.use_aux = False
         if aux_model_type != "":
@@ -1167,9 +1134,7 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.num_features,
-                    aux_cls_token=aux_cls_token,
-                    pooling_cls_token=pooling_cls_token,
-                    use_adaptive_channels=use_adaptive_channels,
+                    aux_cls_token=cls_token_type != "none",
                 )
 
             if aux_model_type == "dinov3" or aux_model_type == "dinov3b":
@@ -1185,9 +1150,7 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.config.hidden_size,
-                    aux_cls_token=aux_cls_token,
-                    pooling_cls_token=pooling_cls_token,
-                    use_adaptive_channels=use_adaptive_channels,
+                    aux_cls_token=cls_token_type != "none",
                 )
             
             if "sam" in aux_model_type:
@@ -1203,8 +1166,6 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.vision_encoder.config.output_channels,
-                    aux_cls_token=aux_cls_token,
-                    pooling_cls_token=pooling_cls_token,
                 )
             
             if "radio" in aux_model_type:
@@ -1220,8 +1181,6 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=1024,
-                    aux_cls_token=aux_cls_token,
-                    pooling_cls_token=pooling_cls_token,
                 )
             
             if "siglip" in aux_model_type:
@@ -1237,8 +1196,6 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=aux_foundation_model.num_features,
-                    aux_cls_token=aux_cls_token,
-                    pooling_cls_token=pooling_cls_token,
                 )
                 
             if "detok_BB" in aux_model_type:
@@ -1254,8 +1211,6 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=16,
-                    aux_cls_token=False,
-                    pooling_cls_token=False,
                 )
 
             if "pixel" in aux_model_type:
@@ -1265,8 +1220,6 @@ class DeTok(nn.Module):
                     model_size=vit_aux_model_size,
                     token_channels=aux_token_channels,
                     aux_embed_dim=3,
-                    aux_cls_token=aux_cls_token,
-                    pooling_cls_token=pooling_cls_token,
                 )
 
         # setup to-posteriors function
@@ -1363,32 +1316,35 @@ class DeTok(nn.Module):
             posteriors = self.to_posteriors(z)
             z_latents = posteriors.sample() if sampling else posteriors.mean
             
-        z_latents_aux = z_latents
+        aux_input = z_latents
 
         if self.training and self.gamma > 0.0:
             device = z_latents.device
             bsz, n_tokens, chans = z_latents.shape
-            noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
-            noise_level_tensor = noise_level_tensor.expand(-1, n_tokens, chans)
+            
+            if self.noise_schedule == "lognorm":
+                normal_samples = torch.randn(bsz, 1, 1, device=device)
+                noise_level_tensor = torch.sigmoid(normal_samples)
+            elif self.noise_schedule == "shift":
+                noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
+                noise_level_tensor = self.timestep_shift * noise_level_tensor / (1 + (self.timestep_shift - 1) * noise_level_tensor)
+            elif self.noise_schedule == "uniform":
+                noise_level_tensor = torch.rand(bsz, 1, 1, device=device)
+            else:
+                raise ValueError(f"Unknown noise schedule: {self.noise_schedule}")
             
             noise = torch.randn(bsz, n_tokens, chans, device=device) * self.gamma
             z_latents = (1 - noise_level_tensor) * z_latents + noise_level_tensor * noise
-
-            if self.noise_schedule == "lognorm":
-                normal_samples = torch.randn(bsz, 1, 1, device=device)
-                noise_level_tensor_aux = torch.sigmoid(normal_samples)
-            elif self.noise_schedule == "shift":
-                noise_level_tensor_aux = torch.rand(bsz, 1, 1, device=device)
-                noise_level_tensor_aux = self.timestep_shift * noise_level_tensor / (1 + (self.timestep_shift - 1) * noise_level_tensor)
-            else:
-                noise_level_tensor_aux = noise_level_tensor
                 
-            if self.aux_input_type == "noisy":
-                z_latents_aux = (1 - noise_level_tensor_aux) * z_latents_aux + noise_level_tensor_aux * noise
+        if self.aux_input_type == "noisy":
+            aux_input = z_latents
+            
+        if self.cls_token_type != "none" and not self.diff_cls_token:
+            z_latents = z_latents[:, 1:]    # remove the cls token
 
         ret = dict(
             z_latents=z_latents,
-            z_latents_aux=z_latents_aux,
+            aux_input=aux_input,
             posteriors=posteriors,
             ids_restore=ids_restore,
             ids_keep=ids_keep,
@@ -1401,7 +1357,7 @@ class DeTok(nn.Module):
         """forward pass through the entire model."""
         ret = self.encode(x, sampling=self.training)
         z_latents = ret["z_latents"]
-        z_latents_aux = ret["z_latents_aux"]
+        aux_input = ret["aux_input"]
         posteriors = ret["posteriors"]
         ids_restore = ret["ids_restore"]
         ids_keep = ret["ids_keep"]
@@ -1422,7 +1378,7 @@ class DeTok(nn.Module):
                     x_dino = F.interpolate(x_dino, size=(224, 224), mode='bilinear', align_corners=False)
                     x_dino = x_dino.to(dtype=x.dtype)
                     with torch.inference_mode():
-                        if self.encoder.aux_cls_token:
+                        if self.cls_token_type != "none":
                             aux_feature = aux_foundation_model.forward_features(x_dino)   # [B, 257, dim]
                         else:
                             aux_feature = aux_foundation_model.forward_features(x_dino)[:, 1:]   # [B, 256, dim]
@@ -1439,7 +1395,7 @@ class DeTok(nn.Module):
                     with torch.inference_mode():
                         aux_feature = aux_foundation_model(**inputs).last_hidden_state
                     
-                    if self.encoder.aux_cls_token:
+                    if self.cls_token_type != "none":
                         aux_feature = torch.cat([aux_feature[:, 0, :].unsqueeze(1), aux_feature[:, 1 + aux_foundation_model.config.num_register_tokens:, :]], dim=1)
                     else:
                         aux_feature = aux_feature[:, 1 + aux_foundation_model.config.num_register_tokens:, :]
@@ -1480,17 +1436,11 @@ class DeTok(nn.Module):
                     x_detok = x
                     with torch.inference_mode():
                         aux_feature = aux_foundation_model.encode(x_detok, sampling=False)["z_latents"]
-                    
-                elif model_type == "pixel":
-                    aux_feature = x_aux
 
                 else:
                     raise ValueError(f"Unknown foundation model type: {model_type}")
                 
-                if model_type == "detok_BB" and self.encoder.aux_cls_token:
-                    pred_aux_feature = aux_decoder(z_latents_aux[:, 1:], ids_restore=ids_restore)
-                else:
-                    pred_aux_feature = aux_decoder(z_latents_aux, ids_restore=ids_restore)
+                pred_aux_feature = aux_decoder(aux_input, ids_restore=ids_restore)
                 
                 if aux_feature.shape[1] != pred_aux_feature.shape[1]:
                     bsz, seq_len, dim = aux_feature.shape

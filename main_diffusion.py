@@ -13,7 +13,7 @@ import torch.distributed
 
 import models
 import utils.distributed as distributed
-from utils.builders import create_generation_model, create_optimizer_and_scaler, create_train_dataloader
+from utils.builders import create_generation_model, create_optimizer_and_scaler, create_train_dataloader, create_auto_guidance_model
 from utils.misc import ckpt_resume, save_checkpoint
 from utils.train_utils import (
     collect_tokenizer_stats,
@@ -40,6 +40,12 @@ def main(args: argparse.Namespace) -> int:
 
     # initialize models
     model, tokenizer, ema_model = create_generation_model(args)
+    
+    if args.use_auto_guidance:
+        auto_guidance_model = create_auto_guidance_model(args)
+        auto_guidance_model.eval()
+        args.additional_model_forward = auto_guidance_model.net
+    
     optimizer, loss_scaler = create_optimizer_and_scaler(args, model)
     model_wo_ddp = model
 
@@ -252,12 +258,17 @@ def get_args_parser():
     parser.add_argument("--keep_eval_folder", action="store_true")
     parser.add_argument("--evaluate", action="store_true")
     parser.add_argument("--eval_bsz", type=int, default=256)
+    
+    # auto guidance parameters
+    parser.add_argument("--use_auto_guidance", action="store_true")
+    parser.add_argument("--auto_guidance_model", type=str, default="ditdh_s")
+    parser.add_argument("--load_auto_guidance_from", type=str, default="work_dirs/gen_model_training/ditddt_s-detokBB-ch128-p16-g3.0-m-0.10.7random-auxdionv3transformernoisyalign-decoderft-ppl1.0/checkpoints/epoch_0009.pth")
 
     # optimization parameters
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--blr", type=float, default=1e-4)
     parser.add_argument("--min_lr", type=float, default=1e-6)
-    parser.add_argument("--lr_sched", type=str, default="linear", choices=["constant", "cosine", "linear"])
+    parser.add_argument("--lr_sched", type=str, default="constant", choices=["constant", "cosine", "linear"])
     parser.add_argument("--warmup_rate", type=float, default=0.25, help="warmup_ep = warmup_rate * total_ep")
     parser.add_argument("--ema_rate", default=0.9999, type=float)
     parser.add_argument("--weight_decay", type=float, default=0.02)

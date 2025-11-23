@@ -160,6 +160,7 @@ def get_args_parser():
     parser.add_argument("--aux_decoder_only", action="store_true")
     parser.add_argument("--channel_drop", default=0.0, type=float)
     parser.add_argument("--low_rank_space", action="store_true")
+    parser.add_argument("--use_qknorm", action="store_true")
     
     parser.add_argument("--mask_ratio", default=0.0, type=float)
     parser.add_argument("--mask_ratio_min", default=-0.1, type=float)
@@ -170,16 +171,13 @@ def get_args_parser():
     parser.add_argument("--use_additive_noise", action="store_true")
     parser.add_argument("--noise_schedule", default="uniform", type=str)
     
-    parser.add_argument("--vf_model_type", default="", type=str)
-    
     parser.add_argument("--aux_model_type", default="", type=str)
     parser.add_argument("--aux_dec_type", default="transformer", type=str)
     parser.add_argument("--vit_aux_model_size", default="tiny", type=str)
     parser.add_argument("--use_adaptive_channels", action="store_true")
     parser.add_argument("--aux_input_type", default="noisy", type=str)
     parser.add_argument("--aux_target", default="reconstruction", type=str)
-    parser.add_argument("--aux_cls_token", action="store_true")
-    parser.add_argument("--pooling_cls_token", action="store_true")
+    parser.add_argument("--cls_token_type", default="none", type=str)
 
     parser.add_argument("--no_load_ckpt", action="store_true")
     parser.add_argument("--train_decoder_only", action="store_true")
@@ -210,7 +208,7 @@ def get_args_parser():
     parser.add_argument("--resume_from", default=None, help="resume model weights and optimizer state")
     parser.add_argument("--load_from", type=str, default=None, help="load from pretrained model")
     parser.add_argument("--keep_n_ckpts", default=1, type=int, help="keep the last n checkpoints")
-    parser.add_argument("--milestone_interval", default=50, type=int, help="keep checkpoints every n epochs")
+    parser.add_argument("--milestone_interval", default=100, type=int, help="keep checkpoints every n epochs")
 
 
     # evaluation parameters
