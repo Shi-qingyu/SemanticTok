@@ -10,7 +10,7 @@ cd /mnt/bn/zilongdata-us/xiangtai/SemanticTok/
 pip install -r requirements.txt
 
 project=tokenizer_training
-batch_size=32
+batch_size=16
 data_path=./data/imagenet/train
 
 model=detok_BB
@@ -32,7 +32,7 @@ aux_loss_weight=1.0
 epochs=200
 discriminator_start_epoch=100
 gamma=1.0
-mask_ratio=0.3
+mask_ratio=0.4
 mask_ratio_min=-0.1
 mask_ratio_type="random"
 vit_aux_model_size="tiny"
