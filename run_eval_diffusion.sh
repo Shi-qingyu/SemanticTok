@@ -22,11 +22,11 @@ global_batch=$(( batch_size * WORLD_SIZE * NPROC_PER_NODE ))
 echo "[INFO] per-GPU batch=${batch_size}, global batch=${global_batch}"
 
 torchrun \
-    --nproc_per_node="${NPROC_PER_NODE}" \
-    --nnodes="${WORLD_SIZE:-1}" \
-    --node_rank="${RANK:-0}" \
-    --master_addr="${MASTER_ADDR:-127.0.0.1}" \
-    --master_port="${MASTER_PORT:-29501}" \
+    --nproc_per_node="8" \
+    --nnodes="1" \
+    --node_rank="0" \
+    --master_addr="127.0.0.1" \
+    --master_port="29501" \
     main_diffusion.py \
     --project $project --exp_name $exp_name \
     --batch_size $batch_size --epochs $epochs \
