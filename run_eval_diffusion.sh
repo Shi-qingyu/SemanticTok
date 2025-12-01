@@ -2,7 +2,7 @@ tokenizer_project=tokenizer_training
 tokenizer=detok_BB
 token_channels=128
 
-tokenizer_exp_name=$1
+tokenizer_exp_name="$1"
 num_register_tokens=0
 
 force_one_d_seq=0
