@@ -139,4 +139,9 @@ torchrun --nproc_per_node=8 --nnodes=$num_nodes --node_rank=${NODE_RANK} --maste
     --data_path ./data/imagenet/train
 ```
 
+### 3. Evaluation
 
+```bash
+bash run_eval_diffusion.sh detokBB-img512-ch128-p16-g1.0shift-m-0.10.3random-auxdinov3transformertinynoisyalign-11-29
+bash run_eval_diffusion.sh detokBB-img512-ch128-p16-g1.0shift-m-0.10.4random-auxdinov3transformertinynoisyalign-11-29
+```

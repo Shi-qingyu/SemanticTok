@@ -2,7 +2,7 @@ tokenizer_project=tokenizer_training
 tokenizer=detok_BB
 token_channels=128
 
-tokenizer_exp_name=detokBB-ch256-p16-g3.0uniform-m-0.10.7random-auxdinov3transformertinynoisyalign-11-10
+tokenizer_exp_name=$1
 num_register_tokens=0
 
 force_one_d_seq=0
@@ -14,7 +14,7 @@ batch_size=128
 epochs=100
 
 GPUS_PER_NODE=${GPUS_PER_NODE:-$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ')}
-GPUS_PER_NODE=${GPUS_PER_NODE:-1}
+GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 NPROC_PER_NODE=${NPROC_PER_NODE:-$GPUS_PER_NODE}
 
 echo "[INFO] nnodes=${WORLD_SIZE}, node_rank=${RANK}, nproc_per_node=${NPROC_PER_NODE}, master=${MASTER_ADDR}:${MASTER_PORT}"
@@ -36,6 +36,7 @@ torchrun \
     --tokenizer $tokenizer \
     --use_ema_tokenizer \
     --collect_tokenizer_stats --stats_key $tokenizer_exp_name --stats_cache_path work_dirs/stats.pkl \
+    --overwrite_stats \
     --load_tokenizer_from work_dirs/tokenizer_training/$tokenizer_exp_name/checkpoints/epoch_0199.pth \
     --load_from $load_from \
     --model DiTDDT_xl \
@@ -44,10 +45,7 @@ torchrun \
     --num_sampling_steps 50 \
     --cfg_list 1.0 \
     --evaluate \
+    --keep_eval_folder \
     --eval_bsz 256 \
     --num_images 50000 \
-    --data_path ./data/imagenet/train \
-    --keep_eval_folder \
-    --use_auto_guidance \
-    --auto_guidance_model DiTDDT_s \
-    --load_auto_guidance_from work_dirs/gen_model_training/ditddt_s-${tokenizer_exp_name}/checkpoints/epoch_0029.pth \
+    --data_path ./data/imagenet/train
